@@ -80,7 +80,9 @@ type Window struct {
 	h       int32
 	scale   float32
 	dpi     uint32
-	onEvent func(Event)
+	// borderQuiet 边框策略首次应用后置位（窗口激活时会反复应用，只首次打日志）
+	borderQuiet bool
+	onEvent     func(Event)
 	running bool
 	id      int
 
@@ -255,8 +257,16 @@ func NewWindow(cfg Config) (*Window, error) {
 		wglSwapIntervalEXT(1)
 	}
 	w.refreshMetrics()
-	// 去掉 DWM 绘制的 1px 系统边框：Win11 上无论有没有标题栏都会在四周画一条
-	// 随系统主题的细线（深色界面里是白/浅灰），这也是「窗口周围一圈边框」的来源。
+	// 无标题栏窗口：把 DWM 边框向外扩 1px，压掉 DWM 在四周画的那条 1px 边框线
+	// （这是“窗口周围一圈浅色细线”的根源；仅靠 DWMWA_BORDER_COLOR 在当前 Win11
+	//  版本上仍有残留，两条一起用才彻底）。
+	if !cfg.Decorated && DwmExtendFrameIntoClientArea != nil {
+		m := MARGINS{Left: 1, Right: 1, Top: 1, Bottom: 1}
+		if DwmExtendFrameIntoClientArea(w.Hwnd, &m) == 0 {
+			dbg("border: DWM 边框已向外扩展 1px")
+		}
+	}
+	// 去掉 DWM 绘制的 1px 系统边框（无标题栏与带标题栏窗口都处理，见 hideSystemBorder）
 	w.hideSystemBorder()
 	w.running = true
 	// 初始圆角（需在 scale 就绪后应用，SetWindowRgn 按物理像素计算）
@@ -494,6 +504,26 @@ func wndProc(hwnd, msg, wp, lp uintptr) uintptr {
 		}
 		return 0
 
+	case WM_NCACTIVATE:
+		// 点击窗口取回焦点时，DWM 会按“活动窗口”重画非客户区与 1px 边框，
+		// 因此每次激活后都重新压掉边框（放在 DefWindowProc 之后才有效），
+		// 否则从别的窗口点回来会停一圈边框，直到下一次重绘/失焦。
+		r := DefWindowProcW(hwnd, msg, wp, lp)
+		w.hideSystemBorder()
+		// 同时重绘一帧：激活瞬间客户区可能残留 1px 旧像素/错位，整帧 glClear 后彻底干净
+		if w.onEvent != nil {
+			w.onEvent(Event{Type: EvNone})
+		}
+		return r
+
+	case WM_ACTIVATE:
+		r := DefWindowProcW(hwnd, msg, wp, lp)
+		w.hideSystemBorder()
+		if w.onEvent != nil {
+			w.onEvent(Event{Type: EvNone})
+		}
+		return r
+
 	case WM_KILLFOCUS:
 		if w.onEvent != nil {
 			w.onEvent(Event{Type: EvFocusLost})
@@ -712,7 +742,11 @@ func (w *Window) hideSystemBorder() {
 	}
 	none := uint32(DWMWA_COLOR_NONE)
 	if DwmSetWindowAttribute(w.Hwnd, DWMWA_BORDER_COLOR, unsafe.Pointer(&none), 4) == 0 {
-		dbg("border: DWM 边框颜色已置为透明")
+		// 激活时会反复调用，只在首次打日志，避免刷屏
+		if !w.borderQuiet {
+			dbg("border: DWM 边框颜色已置为透明")
+			w.borderQuiet = true
+		}
 		return
 	}
 	if w.cfg.Decorated {

@@ -250,18 +250,21 @@ func titleBar() *ui.Node {
 	bar := ui.Row(
 		brand,
 		ui.MenuBar(titleMenu, titleMenus()),
-		ui.Spacer(),
+		// 拖拽区：只有标题栏空白处才交给系统拖动窗口。
+		// 以前是把 OnPress 挂在整条 Column 上，按菜单/按钮时一旦命中的是空白或间隙
+		// 就会进入系统移动模态循环（SC_MOVE），Windows 会在窗口四周画一圈拖动边标，
+		// 按住不放就一直存在，松开才消失——这正是“点顶部菜单冒出一圈边标”的来源。
+		ui.Spacer().OnPressEvt(func() {
+			titleMenu.Close()
+			if a := ui.Current(); a != nil {
+				a.BeginDragMove()
+			}
+		}),
 		ui.WindowButtons(),
 	).St(ui.St().H(titleBarH).PadOnly(0, 10, 0, 8).GapOf(14).BgC(ui.ColBgSoft)).
 		AlignTo(ui.AlignCenter)
 
-	// 按下标题栏空白处：交给系统拖动窗口（菜单/按钮自带 OnClick，不会误触）
-	return ui.Column(bar, ui.Divider()).K("titlebar").OnPressEvt(func() {
-		titleMenu.Close()
-		if a := ui.Current(); a != nil {
-			a.BeginDragMove()
-		}
-	})
+	return ui.Column(bar, ui.Divider()).K("titlebar")
 }
 
 func titleMenus() []ui.MenuDef {

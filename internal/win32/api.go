@@ -119,9 +119,16 @@ var (
 // 窗口圆角（DWM 原生圆角优先；dwmapi 缺失时回退 SetWindowRgn 区域圆角）
 var (
 	DwmSetWindowAttribute func(hwnd uintptr, attr uint32, pv unsafe.Pointer, cb uint32) int32
-	SetWindowRgn          func(hwnd, hrgn uintptr, redraw int32) int32
-	CreateRoundRectRgn    func(x1, y1, x2, y2, w, h int32) uintptr
+	// DwmExtendFrameIntoClientArea：把 DWM 边框向外扩展，用于彻底去掉 1px 边框线
+	DwmExtendFrameIntoClientArea func(hwnd uintptr, m *MARGINS) int32
+	SetWindowRgn                 func(hwnd, hrgn uintptr, redraw int32) int32
+	CreateRoundRectRgn           func(x1, y1, x2, y2, w, h int32) uintptr
 )
+
+// MARGINS DWM 边框扩展尺寸。
+type MARGINS struct {
+	Left, Right, Top, Bottom int32
+}
 
 // IME（imm32）
 var (
@@ -355,6 +362,7 @@ func init() {
 	bind(libGdi32, &CreateRoundRectRgn, "CreateRoundRectRgn")
 	if libDwmapi != 0 {
 		bind(libDwmapi, &DwmSetWindowAttribute, "DwmSetWindowAttribute")
+		bind(libDwmapi, &DwmExtendFrameIntoClientArea, "DwmExtendFrameIntoClientArea")
 	}
 }
 

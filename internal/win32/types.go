@@ -122,6 +122,7 @@ const (
 	WM_SETCURSOR     = 0x0020
 	WM_GETMINMAXINFO = 0x0024
 	WM_NCHITTEST     = 0x0084
+	WM_NCACTIVATE    = 0x0086
 	WM_NCCALCSIZE    = 0x0083
 	// 非客户区命中测试返回值（自绘边框时用于保留窗口缩放能力）
 	HTLEFT           = 10
