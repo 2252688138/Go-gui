@@ -242,10 +242,20 @@ func brandWidth() float32 { return 18 + 8 + ui.TextWidth("GoGUI", 12.5, 600) }
 func titleMenuX() float32 { return 10 + brandWidth() + 14 }
 
 func titleBar() *ui.Node {
+	// dragTitle 按下标题栏空白/品牌区时交给系统拖动窗口
+	dragTitle := func() {
+		titleMenu.Close()
+		if a := ui.Current(); a != nil {
+			a.BeginDragMove()
+		}
+	}
+
 	brand := ui.Row(
 		ui.Box().St(ui.St().W(18).H(18).R(5).BgGrad("#6366f1", "#8b5cf6", 120)),
 		ui.Text("GoGUI").St(ui.St().Text(12.5, 600, ui.ColText)),
 	).St(ui.St().GapOf(8)).AlignTo(ui.AlignCenter)
+	// 品牌区也可以拖窗口（里面没有可交互控件）
+	brand.OnPressEvt(dragTitle)
 
 	bar := ui.Row(
 		brand,
@@ -254,12 +264,8 @@ func titleBar() *ui.Node {
 		// 以前是把 OnPress 挂在整条 Column 上，按菜单/按钮时一旦命中的是空白或间隙
 		// 就会进入系统移动模态循环（SC_MOVE），Windows 会在窗口四周画一圈拖动边标，
 		// 按住不放就一直存在，松开才消失——这正是“点顶部菜单冒出一圈边标”的来源。
-		ui.Spacer().OnPressEvt(func() {
-			titleMenu.Close()
-			if a := ui.Current(); a != nil {
-				a.BeginDragMove()
-			}
-		}),
+		// 注意：无子节点的 Box 高度会塔陷为 0，必须显式给高，否则命中不到、拖不动窗口。
+		ui.Box().St(ui.St().GrowTo(1).H(titleBarH)).OnPressEvt(dragTitle),
 		ui.WindowButtons(),
 	).St(ui.St().H(titleBarH).PadOnly(0, 10, 0, 8).GapOf(14).BgC(ui.ColBgSoft)).
 		AlignTo(ui.AlignCenter)
