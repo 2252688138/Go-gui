@@ -32,6 +32,9 @@ const (
 	EvCompositionStart
 	EvComposition
 	EvCompositionEnd
+	// 系统拖动/缩放窗口开始与结束（WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE）
+	EvSizeMoveStart
+	EvSizeMoveEnd
 )
 
 // Event 传给上层的事件。
@@ -406,6 +409,20 @@ func wndProc(hwnd, msg, wp, lp uintptr) uintptr {
 		if w.onEvent != nil && w.w > 0 && w.h > 0 {
 			lw, lh := w.Size()
 			w.onEvent(Event{Type: EvResize, Width: lw, Height: lh, Scale: w.scale})
+		}
+		return 0
+
+	case WM_ENTERSIZEMOVE:
+		// 系统拖动/缩放窗口：进入模态循环后鼠标消息不再送到窗口，
+		// 上层据此隐藏滚动条与悬停高亮（否则窗边会闪出一条“假滚动条”）。
+		if w.onEvent != nil {
+			w.onEvent(Event{Type: EvSizeMoveStart})
+		}
+		return 0
+
+	case WM_EXITSIZEMOVE:
+		if w.onEvent != nil {
+			w.onEvent(Event{Type: EvSizeMoveEnd})
 		}
 		return 0
 

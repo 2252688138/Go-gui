@@ -109,6 +109,9 @@ const (
 	WM_CREATE        = 0x0001
 	WM_DESTROY       = 0x0002
 	WM_SIZE          = 0x0005
+	// 系统拖动/缩放窗口的模态循环起点与终点
+	WM_ENTERSIZEMOVE = 0x0231
+	WM_EXITSIZEMOVE  = 0x0232
 	WM_ACTIVATE      = 0x0006
 	WM_SETFOCUS      = 0x0007
 	WM_KILLFOCUS     = 0x0008

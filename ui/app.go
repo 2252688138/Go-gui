@@ -137,6 +137,10 @@ type App struct {
 	disposed bool
 	// minimized 上一帧是否处于最小化（恢复时强制重绘，并重建媒体解码窗口）
 	minimized bool
+	// sizeMoving 系统正在拖动/缩放窗口（WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE）。
+	// 模态循环期间鼠标消息不再更新，滚动条/悬停高亮暂停绘制，
+	// 否则窗边会残留一条静止的「假滚动条」。
+	sizeMoving bool
 }
 
 // Run 阻塞运行应用（必须在 main goroutine）。
@@ -337,6 +341,14 @@ func (a *App) handleEvent(ev win32.Event) {
 		a.win.MakeCurrent()
 		// 尺寸变化：重建渲染目标（含超采样）、字形缓存与合成表面
 		a.applyRenderScale()
+	case win32.EvSizeMoveStart:
+		// 开始拖动/缩放窗口：隐藏滚动条与悬停高亮
+		a.sizeMoving = true
+		a.scrollHoverKey = ""
+		a.dirty = true
+	case win32.EvSizeMoveEnd:
+		a.sizeMoving = false
+		a.dirty = true
 	case win32.EvMouseMove:
 		a.mouseX, a.mouseY = ev.X/uiScale, ev.Y/uiScale
 		a.mouseIn = true
@@ -789,6 +801,10 @@ const scrollbarZone = 12
 // updateScrollbar 处理滚动条悬停、拖动与轨道点击。
 func (a *App) updateScrollbar(root *Node) {
 	a.scrollHoverKey = ""
+	// 拖动/缩放窗口期间：鼠标消息已进不了窗口，滚动条悬停与拖动状态一律冻结
+	if a.sizeMoving {
+		return
+	}
 	if !a.mouseIn {
 		if !a.pressed {
 			a.scrollDragKey = ""
@@ -919,6 +935,10 @@ func scrollViewport(n *Node, sy float32, a *App) (y0, y1 float32, ok bool) {
 
 // paintScrollbar 绘制纵向滚动条（内容溢出时显示；悬停/拖动加宽，闲置淡出）。
 func (a *App) paintScrollbar(n *Node, r geom.Rect) {
+	// 拖动/缩放窗口期间不画滚动条（否则窗边会闪出/残留一条静止的条）
+	if a.sizeMoving {
+		return
+	}
 	if n.Key == "" {
 		return
 	}
