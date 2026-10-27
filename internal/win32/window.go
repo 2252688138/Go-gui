@@ -255,10 +255,9 @@ func NewWindow(cfg Config) (*Window, error) {
 		wglSwapIntervalEXT(1)
 	}
 	w.refreshMetrics()
-	// 无系统标题栏时去掉 DWM 绘制的 1px 白色边框
-	if !cfg.Decorated {
-		w.hideSystemBorder()
-	}
+	// 去掉 DWM 绘制的 1px 系统边框：Win11 上无论有没有标题栏都会在四周画一条
+	// 随系统主题的细线（深色界面里是白/浅灰），这也是「窗口周围一圈边框」的来源。
+	w.hideSystemBorder()
 	w.running = true
 	// 初始圆角（需在 scale 就绪后应用，SetWindowRgn 按物理像素计算）
 	if cfg.CornerRadius > 0 {
@@ -704,8 +703,9 @@ func (w *Window) reapplyCorner() {
 	}
 }
 
-// hideSystemBorder 去掉 DWM 为无边框窗口绘制的 1px 系统边框（Win11 上是四周白色细线）。
-// Win11 用 DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE；旧版本回退关闭非客户区渲染。
+// hideSystemBorder 去掉 DWM 绘制的 1px 系统边框（Win11 上是四周与强调色/系统主题相关的细线）。
+// Win11 用 DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE（带标题栏的窗口同样有效）；
+// 旧版本回退关闭非客户区渲染——该回退会把标题栏一起去掉，所以只在无标题栏窗口上做。
 func (w *Window) hideSystemBorder() {
 	if w == nil || w.Hwnd == 0 || DwmSetWindowAttribute == nil {
 		return
@@ -713,6 +713,9 @@ func (w *Window) hideSystemBorder() {
 	none := uint32(DWMWA_COLOR_NONE)
 	if DwmSetWindowAttribute(w.Hwnd, DWMWA_BORDER_COLOR, unsafe.Pointer(&none), 4) == 0 {
 		dbg("border: DWM 边框颜色已置为透明")
+		return
+	}
+	if w.cfg.Decorated {
 		return
 	}
 	// Win10 及更早：关闭 DWM 非客户区渲染，避免残留白边
