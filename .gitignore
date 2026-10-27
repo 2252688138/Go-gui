@@ -1,0 +1,43 @@
+# 构建产物（不要提交）
+/bin/
+/dist/
+*.exe
+*.upx
+rsrc_windows_*.syso.bak
+
+# 调试 / 临时输出
+.zym/
+*.log
+d_v6.txt
+dump.txt
+dump_menu.txt
+err*.txt
+out*.txt
+*_dump*.txt
+*.bak
+*.tmp
+
+# Go 测试与性能采样
+*.test
+*.out
+cpu.prof
+mem.prof
+coverage.txt
+
+# 编辑器 / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.suo
+*.user
+
+# 系统
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 注意：以下文件必须提交（勿加入忽略）
+#   WebView2Loader.dll     通过 //go:embed 打进二进制
+#   ui/assets/icon.ico     应用图标
+#   cmd/*/rsrc_windows_*.syso  exe 图标资源
