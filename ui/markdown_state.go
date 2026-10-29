@@ -1,3 +1,8 @@
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 package ui
 
 // Markdown 组件的共享状态（页签 / 折叠 / 复制提示 / 图片预览）与解析缓存。

@@ -1,3 +1,8 @@
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 // Package geom 提供与渲染无关的几何基础类型（float32，直接喂 GPU）。
 package geom
 

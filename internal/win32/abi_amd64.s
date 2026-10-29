@@ -1,3 +1,8 @@
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 #include "textflag.h"
 
 // 说明：Win64 上带 float 参数的 COM 调用已改为运行时生成机器码（com_float_amd64.go），

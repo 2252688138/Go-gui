@@ -1,5 +1,10 @@
 //go:build windows && amd64 && !(cgo && gogui_cgo)
 
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 package win32
 
 import (

@@ -1,3 +1,8 @@
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 // Package text 提供字形光栅化与测量。
 //
 // 光栅化方式参考 gio：不使用 GDI 的提示化位图，而是用 golang.org/x/image/font/opentype

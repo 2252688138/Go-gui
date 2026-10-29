@@ -1,5 +1,10 @@
 //go:build js && wasm
 
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 // GoGUI 浏览器版 gallery（与 main.go 同一目录、同一入口，靠 build tag 分流）：
 //
 //   GOOS=js GOARCH=wasm go build ./cmd/gallery   -> Web 版

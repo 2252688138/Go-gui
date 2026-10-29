@@ -1,3 +1,8 @@
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 package ui
 
 // Event 平台无关的输入/窗口事件。桌面端由 Win32 消息翻译而来，浏览器端由 DOM 事件翻译，

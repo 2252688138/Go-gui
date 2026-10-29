@@ -1,5 +1,10 @@
 //go:build windows && cgo && gogui_cgo
 
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 package win32
 
 // float 参数 COM 调用（cgo 版）：把「取虚表 + 把 float 放进 XMM」交给 C 编译器生成。

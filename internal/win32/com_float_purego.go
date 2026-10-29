@@ -1,5 +1,10 @@
 //go:build windows && !(cgo && gogui_cgo)
 
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 package win32
 
 // 纯 Go 构建：没有 cgo，无法可靠地调用带 float 参数的 COM 方法

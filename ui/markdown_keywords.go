@@ -1,3 +1,8 @@
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 package ui
 
 // 语法着色关键字表（按语言分类）。放到独立文件，避免与扫描器逻辑混在一起。

@@ -1,5 +1,10 @@
 //go:build windows
 
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 // gallery 桌面版：含视频/音乐/WebView/系统能力等 Windows 专属案例。
 // Web 版是同一目录下的 web.go（js && wasm），入口同为 go build ./cmd/gallery。
 // 运行：go run ./cmd/gallery

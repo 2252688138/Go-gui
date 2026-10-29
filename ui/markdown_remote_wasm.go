@@ -1,5 +1,10 @@
 //go:build js && wasm
 
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 package ui
 
 // 浏览器版没有本地文件系统缓存，远程图片统一降级为占位卡。

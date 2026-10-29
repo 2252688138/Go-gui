@@ -1,3 +1,8 @@
+// Go-gui
+// Author  : Mr.Shu
+// Website : www.cq6k.com
+// QQ Group: 点击链接加入群聊【Go-gui】：https://qm.qq.com/q/Be12Z5MVJ6
+
 // Package gpu 提供与平台/UI 解耦的 2D GPU 渲染后端接口及 OpenGL 3.3 实现。
 package gpu
 
