@@ -56,6 +56,8 @@ func mdHighlighter(lang string) func(string) []mdHLSpan {
 		return mdScanCSS
 	case "yaml", "yml", "toml", "ini", "conf":
 		return mdScanYAML
+	case "diff", "patch":
+		return mdScanDiff
 	}
 	return func(s string) []mdHLSpan { return []mdHLSpan{{Text: s, Kind: "txt"}} }
 }
@@ -629,6 +631,20 @@ func mdScanCSS(s string) []mdHLSpan {
 		}
 	}
 	return out
+}
+
+// mdScanDiff diff / patch：新增行、删除行、区块头分别着色。
+func mdScanDiff(s string) []mdHLSpan {
+	switch {
+	case strings.HasPrefix(s, "+++"), strings.HasPrefix(s, "---"),
+		strings.HasPrefix(s, "diff "), strings.HasPrefix(s, "Index:"), strings.HasPrefix(s, "@@"):
+		return []mdHLSpan{{Text: s, Kind: "meta"}}
+	case strings.HasPrefix(s, "+"):
+		return []mdHLSpan{{Text: s, Kind: "add"}}
+	case strings.HasPrefix(s, "-"):
+		return []mdHLSpan{{Text: s, Kind: "del"}}
+	}
+	return []mdHLSpan{{Text: s, Kind: "txt"}}
 }
 
 // mdScanYAML YAML / TOML / ini。

@@ -1,3 +1,5 @@
+//go:build windows
+
 package win32
 
 import (
@@ -19,6 +21,7 @@ var (
 	libShell32  uintptr
 	libOle32    uintptr
 	libDwmapi   uintptr
+	libAdvapi32 uintptr
 )
 
 func loadLib(name string) uintptr {
@@ -248,6 +251,7 @@ func init() {
 	libShell32 = loadLib("shell32.dll")
 	libOle32 = loadLib("ole32.dll")
 	libDwmapi = loadLibOptional("dwmapi.dll")
+	libAdvapi32 = loadLib("advapi32.dll")
 
 	bind(libUser32, &RegisterClassExW, "RegisterClassExW")
 	bind(libUser32, &UnregisterClassW, "UnregisterClassW")
@@ -355,6 +359,23 @@ func init() {
 	bind(libShell32, &SHBrowseForFolderW, "SHBrowseForFolderW")
 	bind(libShell32, &SHGetPathFromIDListW, "SHGetPathFromIDListW")
 	bind(libShell32, &ShellExecuteW, "ShellExecuteW")
+	// 文件拖入（drop.go）
+	bind(libShell32, &DragAcceptFiles, "DragAcceptFiles")
+	bind(libShell32, &DragQueryFileW, "DragQueryFileW")
+	bind(libShell32, &DragQueryPoint, "DragQueryPoint")
+	bind(libShell32, &DragFinish, "DragFinish")
+	// 回收站删除（system.go）
+	bindOptional(libShell32, &SHFileOperationW, "SHFileOperationW")
+
+	// 全局热键（system.go）
+	bind(libUser32, &RegisterHotKey, "RegisterHotKey")
+	bind(libUser32, &UnregisterHotKey, "UnregisterHotKey")
+	// 阻止休眠 / 屏幕常亮（system.go）
+	bind(libKernel32, &SetThreadExecutionState, "SetThreadExecutionState")
+	// 系统深浅色检测（system.go）
+	bind(libAdvapi32, &RegOpenKeyExW, "RegOpenKeyExW")
+	bind(libAdvapi32, &RegQueryValueExW, "RegQueryValueExW")
+	bind(libAdvapi32, &RegCloseKey, "RegCloseKey")
 
 	bind(libOle32, &CoTaskMemFree, "CoTaskMemFree")
 

@@ -1,10 +1,7 @@
 package gpu
 
 import (
-	"unsafe"
-
 	"gogui/internal/geom"
-	"gogui/internal/win32"
 )
 
 const floatsImgVert = 16
@@ -16,13 +13,13 @@ func (r *Renderer) initImage() error {
 		return err
 	}
 	r.imgProg = p
-	r.uImgVP = win32.GlGetUniformLocation(p, cstr("uViewport"))
-	r.uImgTex = win32.GlGetUniformLocation(p, cstr("uTex"))
+	r.uImgVP = glGetUniformLocation(p, "uViewport")
+	r.uImgTex = glGetUniformLocation(p, "uTex")
 
-	win32.GlGenVertexArrays(1, &r.imgVAO)
-	win32.GlGenBuffers(1, &r.imgVBO)
-	win32.GlBindVertexArray(r.imgVAO)
-	win32.GlBindBuffer(win32.GL_ARRAY_BUFFER, r.imgVBO)
+	glGenVertexArrays(1, &r.imgVAO)
+	glGenBuffers(1, &r.imgVBO)
+	glBindVertexArray(r.imgVAO)
+	glBindBuffer(GL_ARRAY_BUFFER, r.imgVBO)
 	sd := int32(floatsImgVert * 4)
 	setAttr(0, 2, sd, 0)
 	setAttr(1, 2, sd, 8)
@@ -30,7 +27,7 @@ func (r *Renderer) initImage() error {
 	setAttr(3, 2, sd, 32)
 	setAttr(4, 2, sd, 40)
 	setAttr(5, 4, sd, 48)
-	win32.GlBindVertexArray(0)
+	glBindVertexArray(0)
 
 	r.imgData = make([]float32, 0, 4096*floatsImgVert)
 	return nil
@@ -89,7 +86,6 @@ func (r *Renderer) DrawImage(im Image) {
 		)
 	}
 	r.imgN += 6
-	_ = unsafe.Pointer(nil)
 	_ = geom.Rect{}
 }
 

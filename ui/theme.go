@@ -1,9 +1,7 @@
 package ui
 
 import (
-	"syscall"
 	"time"
-	"unsafe"
 
 	"gogui/internal/gpu"
 )
@@ -198,6 +196,8 @@ func applyTheme(t Theme) {
 	ColGlass = t.Glass
 	// Markdown 自带色板同步刷新（正文/代码块/语法高亮）
 	mdApplyTheme(t)
+	// 色板变了，Markdown 渲染树缓存必须失效
+	mdTouchState()
 	// 窗口清屏色跟随主题，但保留 Options.Background 里设定的透明度
 	// （圆角边缘的 alpha 过渡不能被覆盖成不透明）
 	if app := Current(); app != nil {
@@ -251,40 +251,7 @@ func startThemeWatch() {
 	})
 }
 
-// ---- 系统主题探测（注册表 AppsUseLightTheme）----
-
-var (
-	advapi32       = syscall.NewLazyDLL("advapi32.dll")
-	procRegGetValue = advapi32.NewProc("RegGetValueW")
-)
+// ---- 系统主题探测（桌面读注册表，浏览器读 prefers-color-scheme）----
 
 // SystemPrefersDark 读取系统是否使用深色模式（读取失败时按深色处理）。
-func SystemPrefersDark() bool {
-	const (
-		hkeyCurrentUser = 0x80000001
-		rrfRtRegDword   = 0x00000010
-	)
-	key, err := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`)
-	if err != nil {
-		return true
-	}
-	name, err := syscall.UTF16PtrFromString("AppsUseLightTheme")
-	if err != nil {
-		return true
-	}
-	var val uint32
-	size := uint32(4)
-	r, _, _ := procRegGetValue.Call(
-		hkeyCurrentUser,
-		uintptr(unsafe.Pointer(key)),
-		uintptr(unsafe.Pointer(name)),
-		rrfRtRegDword,
-		0,
-		uintptr(unsafe.Pointer(&val)),
-		uintptr(unsafe.Pointer(&size)),
-	)
-	if r != 0 {
-		return true
-	}
-	return val == 0
-}
+func SystemPrefersDark() bool { return platformPrefersDark() }

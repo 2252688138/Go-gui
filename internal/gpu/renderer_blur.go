@@ -2,10 +2,8 @@ package gpu
 
 import (
 	"math"
-	"unsafe"
 
 	"gogui/internal/geom"
-	"gogui/internal/win32"
 )
 
 // fboRT 离屏渲染目标（纹理 + 帧缓冲）。
@@ -23,14 +21,14 @@ func (r *Renderer) initBlur() error {
 		return err
 	}
 	r.blurProg = p
-	r.uBlurTex = win32.GlGetUniformLocation(p, cstr("uTex"))
-	r.uBlurTexel = win32.GlGetUniformLocation(p, cstr("uTexel"))
-	r.uBlurRadius = win32.GlGetUniformLocation(p, cstr("uRadius"))
+	r.uBlurTex = glGetUniformLocation(p, "uTex")
+	r.uBlurTexel = glGetUniformLocation(p, "uTexel")
+	r.uBlurRadius = glGetUniformLocation(p, "uRadius")
 
-	win32.GlGenVertexArrays(1, &r.blurVAO)
-	win32.GlGenBuffers(1, &r.blurVBO)
-	win32.GlBindVertexArray(r.blurVAO)
-	win32.GlBindBuffer(win32.GL_ARRAY_BUFFER, r.blurVBO)
+	glGenVertexArrays(1, &r.blurVAO)
+	glGenBuffers(1, &r.blurVBO)
+	glBindVertexArray(r.blurVAO)
+	glBindBuffer(GL_ARRAY_BUFFER, r.blurVBO)
 	quad := []float32{
 		-1, -1, 0, 0,
 		1, -1, 1, 0,
@@ -39,10 +37,10 @@ func (r *Renderer) initBlur() error {
 		1, 1, 1, 1,
 		-1, 1, 0, 1,
 	}
-	win32.GlBufferData(win32.GL_ARRAY_BUFFER, len(quad)*4, unsafe.Pointer(&quad[0]), win32.GL_STATIC_DRAW)
+	glBufferData(GL_ARRAY_BUFFER, quad, GL_STATIC_DRAW)
 	setAttr(0, 2, 16, 0)
 	setAttr(1, 2, 16, 8)
-	win32.GlBindVertexArray(0)
+	glBindVertexArray(0)
 	return nil
 }
 
@@ -62,10 +60,10 @@ func (r *Renderer) ensureRT(rt **fboRT, w, h int32) *fboRT {
 	}
 	t := r.NewTextureRGBA(int(w), int(h), nil)
 	var fbo uint32
-	win32.GlGenFramebuffers(1, &fbo)
-	win32.GlBindFramebuffer(win32.GL_FRAMEBUFFER, fbo)
-	win32.GlFramebufferTexture2D(win32.GL_FRAMEBUFFER, win32.GL_COLOR_ATTACHMENT0, win32.GL_TEXTURE_2D, t.ID, 0)
-	win32.GlBindFramebuffer(win32.GL_FRAMEBUFFER, 0)
+	glGenFramebuffers(1, &fbo)
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t.ID, 0)
+	glBindFramebuffer(GL_FRAMEBUFFER, 0)
 	*rt = &fboRT{fbo: fbo, tex: t, w: w, h: h}
 	return *rt
 }
@@ -75,29 +73,29 @@ func (r *Renderer) freeRT(rt *fboRT) {
 		return
 	}
 	if rt.fbo != 0 {
-		win32.GlDeleteFramebuffers(1, &rt.fbo)
+		glDeleteFramebuffers(1, &rt.fbo)
 	}
 	if rt.tex != nil && rt.tex.ID != 0 {
 		id := rt.tex.ID
-		win32.GlDeleteTextures(1, &id)
+		glDeleteTextures(1, &id)
 	}
 }
 
 // blurPass 把 src 纹理以双 Kawase 采样写入 dst（同时完成降采样）。
 func (r *Renderer) blurPass(src uint32, dst *fboRT, radius float32) {
-	win32.GlBindFramebuffer(win32.GL_FRAMEBUFFER, dst.fbo)
-	win32.GlViewport(0, 0, dst.w, dst.h)
-	win32.GlDisable(win32.GL_SCISSOR_TEST)
+	glBindFramebuffer(GL_FRAMEBUFFER, dst.fbo)
+	glViewport(0, 0, dst.w, dst.h)
+	glDisable(GL_SCISSOR_TEST)
 	r.clipOn = false
-	win32.GlUseProgram(r.blurProg)
-	win32.GlUniform1i(r.uBlurTex, 0)
-	win32.GlActiveTexture(win32.GL_TEXTURE0)
-	win32.GlBindTexture(win32.GL_TEXTURE_2D, src)
-	win32.GlUniform2f(r.uBlurTexel, 1/float32(dst.w), 1/float32(dst.h))
-	win32.GlUniform1f(r.uBlurRadius, radius)
-	win32.GlBindVertexArray(r.blurVAO)
-	win32.GlDrawArrays(win32.GL_TRIANGLES, 0, 6)
-	win32.GlBindVertexArray(0)
+	glUseProgram(r.blurProg)
+	glUniform1i(r.uBlurTex, 0)
+	glActiveTexture(GL_TEXTURE0)
+	glBindTexture(GL_TEXTURE_2D, src)
+	glUniform2f(r.uBlurTexel, 1/float32(dst.w), 1/float32(dst.h))
+	glUniform1f(r.uBlurRadius, radius)
+	glBindVertexArray(r.blurVAO)
+	glDrawArrays(GL_TRIANGLES, 0, 6)
+	glBindVertexArray(0)
 }
 
 // Backdrop 实现 backdrop-filter 毛玻璃：捕获当前帧已绘制内容，
@@ -136,9 +134,9 @@ func (r *Renderer) Backdrop(rect geom.Rect, radius [4]float32, blur float32, tin
 
 	// 捕获已绘制背景到纹理
 	src := r.ensureRT(&r.srcTex, w, h)
-	win32.GlActiveTexture(win32.GL_TEXTURE0)
-	win32.GlBindTexture(win32.GL_TEXTURE_2D, src.tex.ID)
-	win32.GlCopyTexSubImage2D(win32.GL_TEXTURE_2D, 0, 0, 0, x0, y0, w, h)
+	glActiveTexture(GL_TEXTURE0)
+	glBindTexture(GL_TEXTURE_2D, src.tex.ID)
+	glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, x0, y0, w, h)
 
 	// 逐级降采样（模糊半径随层级自然放大）
 	a := r.ensureRT(&r.halfA, w/2+1, h/2+1)
@@ -155,12 +153,12 @@ func (r *Renderer) Backdrop(rect geom.Rect, radius [4]float32, blur float32, tin
 	}
 
 	// 回到当前绘制目标（开启超采样时是离屏 RT，否则是呈现目标）
-	win32.GlBindFramebuffer(win32.GL_FRAMEBUFFER, r.drawFBO)
-	win32.GlViewport(0, 0, r.pw, r.ph)
+	glBindFramebuffer(GL_FRAMEBUFFER, r.drawFBO)
+	glViewport(0, 0, r.pw, r.ph)
 	if n := len(r.clipSaved); n > 0 {
 		r.setClip(r.clipSaved[n-1])
 	} else {
-		win32.GlDisable(win32.GL_SCISSOR_TEST)
+		glDisable(GL_SCISSOR_TEST)
 		r.clipOn = false
 	}
 

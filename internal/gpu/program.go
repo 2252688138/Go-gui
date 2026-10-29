@@ -1,50 +1,43 @@
 package gpu
 
-import (
-	"fmt"
-	"unsafe"
-
-	"gogui/internal/win32"
-)
+import "fmt"
 
 func linkProgram(vs, fs string) (uint32, error) {
-	v, err := compileShader(win32.GL_VERTEX_SHADER, vs)
+	v, err := compileShader(GL_VERTEX_SHADER, vs)
 	if err != nil {
 		return 0, err
 	}
-	f, err := compileShader(win32.GL_FRAGMENT_SHADER, fs)
+	f, err := compileShader(GL_FRAGMENT_SHADER, fs)
 	if err != nil {
-		win32.GlDeleteShader(v)
+		glDeleteShader(v)
 		return 0, err
 	}
-	p := win32.GlCreateProgram()
-	win32.GlAttachShader(p, v)
-	win32.GlAttachShader(p, f)
-	win32.GlLinkProgram(p)
+	p := glCreateProgram()
+	glAttachShader(p, v)
+	glAttachShader(p, f)
+	glLinkProgram(p)
 
 	var ok int32
-	win32.GlGetProgramiv(p, win32.GL_LINK_STATUS, &ok)
-	win32.GlDeleteShader(v)
-	win32.GlDeleteShader(f)
+	glGetProgramiv(p, GL_LINK_STATUS, &ok)
+	glDeleteShader(v)
+	glDeleteShader(f)
 	if ok == 0 {
 		log := shaderLog(p, true)
-		win32.GlDeleteProgram(p)
+		glDeleteProgram(p)
 		return 0, fmt.Errorf("link failed: %s", log)
 	}
 	return p, nil
 }
 
 func compileShader(typ uint32, src string) (uint32, error) {
-	s := win32.GlCreateShader(typ)
-	cs := cstr(src)
-	l := int32(len(src))
-	win32.GlShaderSource(s, 1, &cs, &l)
-	win32.GlCompileShader(s)
+	s := glCreateShader(typ)
+	glShaderSource(s, src)
+	glCompileShader(s)
 	var ok int32
-	win32.GlGetShaderiv(s, win32.GL_COMPILE_STATUS, &ok)
+	glGetShaderiv(s, GL_COMPILE_STATUS, &ok)
 	if ok == 0 {
 		log := shaderLog(s, false)
-		win32.GlDeleteShader(s)
+		glDeleteShader(s)
 		return 0, fmt.Errorf("compile failed: %s", log)
 	}
 	return s, nil
@@ -53,9 +46,9 @@ func compileShader(typ uint32, src string) (uint32, error) {
 func shaderLog(obj uint32, isProgram bool) string {
 	var n int32
 	if isProgram {
-		win32.GlGetProgramiv(obj, win32.GL_INFO_LOG_LENGTH, &n)
+		glGetProgramiv(obj, GL_INFO_LOG_LENGTH, &n)
 	} else {
-		win32.GlGetShaderiv(obj, win32.GL_INFO_LOG_LENGTH, &n)
+		glGetShaderiv(obj, GL_INFO_LOG_LENGTH, &n)
 	}
 	if n <= 1 {
 		return "(no log)"
@@ -63,11 +56,10 @@ func shaderLog(obj uint32, isProgram bool) string {
 	buf := make([]byte, n)
 	var written int32
 	if isProgram {
-		win32.GlGetProgramInfoLog(obj, n, &written, &buf[0])
+		glGetProgramInfoLog(obj, n, &written, &buf[0])
 	} else {
-		win32.GlGetShaderInfoLog(obj, n, &written, &buf[0])
+		glGetShaderInfoLog(obj, n, &written, &buf[0])
 	}
-	_ = unsafe.Pointer(nil)
 	if written > 0 && int(written) <= len(buf) {
 		buf = buf[:written]
 	}

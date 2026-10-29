@@ -77,6 +77,8 @@ type texUpload struct {
 // texEntry 一张图片的纹理状态。
 type texEntry struct {
 	tex     *gpu.Texture
+	bytes   int64
+	stamp   int64 // 最近一次被绘制的帧号（LRU 回收用）
 	err     error
 	failed  bool
 	started atomic.Bool
@@ -87,9 +89,15 @@ type texEntry struct {
 type imageTextures struct {
 	mu sync.Mutex
 	m  map[string]*texEntry
+	// bytes 当前缓存纹理的总字节数（用于按预算回收，避免长列表图片页显存只增不减）
+	bytes int64
 	// waiting 限流而被推迟的解码请求数（>0 时需继续刷帧重试）
 	waiting atomic.Int32
 }
+
+// imageTexBudget 单窗口图片纹理预算：超出后按「最近未使用」回收纹理。
+// 旧实现只增不减，翻完几百张图的相册/长列表后显存与堆都不会回落。
+const imageTexBudget int64 = 96 << 20
 
 func newImageTextures() *imageTextures { return &imageTextures{m: map[string]*texEntry{}} }
 
@@ -113,6 +121,7 @@ func imagePending() int { return int(imageLoads.Load()) }
 // 停顿几十上百毫秒，表现出来就是滚动/翻页时的卡顿。
 func (t *imageTextures) get(r *gpu.Renderer, a *App, path string) *gpu.Texture {
 	e := t.entry(path)
+	e.stamp = int64(a.frameCount)
 	if e.tex != nil {
 		return e.tex
 	}
@@ -123,6 +132,13 @@ func (t *imageTextures) get(r *gpu.Renderer, a *App, path string) *gpu.Texture {
 		}
 		b := up.img.Bounds()
 		e.tex = r.NewTextureRGBA(b.Dx(), b.Dy(), up.img.Pix)
+		if e.tex != nil {
+			e.bytes = int64(b.Dx()) * int64(b.Dy()) * 4
+			t.mu.Lock()
+			t.bytes += e.bytes
+			t.mu.Unlock()
+			t.evict(r, e.stamp)
+		}
 		return e.tex
 	}
 	if e.failed {
@@ -131,6 +147,44 @@ func (t *imageTextures) get(r *gpu.Renderer, a *App, path string) *gpu.Texture {
 	t.start(e, a, path)
 	return nil
 }
+
+// evict 显存超预算时按最近未使用回收纹理。
+// keep 为本帧帧号：本帧正在绘制的纹理即使很旧也不能删，
+// 否则已经进批次但尚未提交的顶点会引用已删除的纹理。
+func (t *imageTextures) evict(r *gpu.Renderer, keep int64) {
+	t.mu.Lock()
+	if t.bytes <= imageTexBudget {
+		t.mu.Unlock()
+		return
+	}
+	var victimKey string
+	var victim *texEntry
+	for k, e := range t.m {
+		if e.tex == nil || e.stamp == keep {
+			continue
+		}
+		if victim == nil || e.stamp < victim.stamp {
+			victimKey, victim = k, e
+		}
+	}
+	if victim == nil {
+		t.mu.Unlock()
+		return
+	}
+	t.bytes -= victim.bytes
+	delete(t.m, victimKey)
+	t.mu.Unlock()
+
+	r.DeleteTexture(victim.tex)
+	victim.tex = nil
+	victim.bytes = 0
+	victim.started.Store(false) // 再次进入视口时重新解码
+}
+
+// beginFrame 每帧开始前重置限流标记。
+// 旧实现里 waiting 一旦被置 1 就再也没人清 0（图片滚出视口后不会再有 start 调用），
+// frame() 看到 waiting>0 会持续请求重绘 —— 表现为滚过一批图片后窗口永久 100% CPU。
+func (t *imageTextures) beginFrame() { t.waiting.Store(0) }
 
 func (t *imageTextures) entry(path string) *texEntry {
 	t.mu.Lock()

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"gogui/internal/text"
-	"gogui/internal/win32"
 )
 
 // Markdown 渲染组件（声明式节点，每帧重建）。
@@ -18,9 +17,14 @@ import (
 //
 // 与 Web 版的差异（受 GoGUI 约束）：
 //   - KText 只支持单一字体样式，行内多样式按「片段 + 手工折行」排版；
-//   - 图片只支持本地文件（远程 URL 显示为占位卡）；
+//   - 图片支持本地文件与 http(s) 远程地址（远程先下载到临时目录缓存）；
 //   - video/audio 块降级为占位卡（真正播放请用 ui.VideoPlayer）；
 //   - 链接点击走系统默认浏览器（win32.ShellOpen）。
+//
+// 支持的块：标题（含锚点）、段落、列表（含任务勾选）、引用/提示块、代码（行号/
+// 着色/复制/折叠/diff 行底色/可选横向平移）、表格（数字列右对齐）、图片（含
+// lightbox）、分隔线、页签、折叠、卡片、徽章、进度、图集、媒体、目录（可点击
+// 滚动）、数学公式（LaTeX 子集真排版）、Mermaid 提示卡、定义列表、脚注。
 //
 // 用法：
 //
@@ -42,6 +46,8 @@ type MarkdownOptions struct {
 	MaxImageHeight float32
 	// CodeMaxLines 代码块折叠阈值（0 = 22，<0 不折叠）。
 	CodeMaxLines int
+	// CodeNoWrap 代码块不自动折行：超宽时横向平移查看（默认折行）。
+	CodeNoWrap bool
 	// OnLink 链接点击回调；nil 时用 win32.ShellOpen 打开。
 	OnLink func(url string)
 	// NoTOC 不渲染 [toc] 块。
@@ -137,13 +143,25 @@ func mdApplyTheme(t Theme) {
 
 // ---- 交互状态（UI 线程独占） ----
 
+// mdStateRev 交互状态版本号：页签切换 / 折叠展开 / 主题变化都会 +1。
+// 这些状态会影响 renderBlocks 的输出，渲染树缓存用它做失效判断
+// （渲染树是复用的同一批节点，不能靠指针比较判断是否需要重建）。
+var mdStateRev uint64
+
+// mdTouchState 标记渲染树缓存失效。
+func mdTouchState() { mdStateRev++ }
+
 // MarkdownResetState 清空页签/折叠/图片预览等交互状态。
 func MarkdownResetState() {
 	mdState.tabs = map[string]int{}
 	mdState.details = map[string]bool{}
 	mdState.folded = map[string]bool{}
+	mdState.checks = map[string]bool{}
+	mdState.codeX = map[string]float32{}
+	mdState.anchors = map[string]*Node{}
 	mdState.toast = ""
 	mdState.viewer.Open = false
+	mdTouchState()
 }
 
 func mdToast(msg string) {
@@ -168,7 +186,7 @@ func mdOpenURL(url string) {
 		mdToast("锚点：" + strings.TrimPrefix(url, "#"))
 		return
 	}
-	win32.ShellOpen(url)
+	ShellOpen(url)
 }
 
 // ---- 字体与测量 ----
@@ -201,13 +219,18 @@ type mdSpan struct {
 	link   string
 	strike bool
 	code   bool
+	fnRef  string
 }
 
-// mdPiece 排版 token（词 / 单字 / 空格）。
+// mdPiece 排版 token（词 / 单字 / 空格 / 公式 / 上下标）。
 type mdPiece struct {
 	text string
 	sp   mdSpan
 	br   bool
+	// math 行内公式（已排版，宽度从盒里取）
+	math *matBox
+	// script 0=普通 1=上标 2=下标
+	script int
 }
 
 // mdBaseSpan 正文默认样式。
@@ -268,8 +291,25 @@ func mdMono(o MarkdownOptions) string {
 	return "Consolas"
 }
 
+// mdIsRemote 是否远程图片地址。
+func mdIsRemote(src string) bool {
+	s := strings.ToLower(src)
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// mdImagePath 把图片来源解析为本地路径（远程地址先下载到临时缓存）。
+func mdImagePath(src string) (string, bool) {
+	if mdIsRemote(src) {
+		return mdRemoteImagePath(src)
+	}
+	return src, true
+}
+
 // mdPieceWidth 单个片段宽度（含内边距）。
 func mdPieceWidth(p mdPiece) float32 {
+	if p.math != nil {
+		return p.math.w
+	}
 	if p.text == "" {
 		return 0
 	}
@@ -286,6 +326,35 @@ func mdTokens(runs []mdInline, base mdSpan, o MarkdownOptions) []mdPiece {
 	for _, r := range runs {
 		if r.Br {
 			out = append(out, mdPiece{br: true})
+			continue
+		}
+		// 行内公式
+		if r.Math != "" {
+			if b, ok := mdMathBox(r.Math, base.size, base.family, base.color, false); ok {
+				out = append(out, mdPiece{math: &b})
+				continue
+			}
+			out = append(out, mdPiece{text: r.Math, sp: mdSpan{size: base.size, weight: 400, family: "Consolas", color: mdColDim, code: true, bg: mdColInline, padX: 3, padY: 1}})
+			continue
+		}
+		// 上标 / 下标
+		if r.Sup != "" || r.Sub != "" {
+			sp := base
+			sp.size = base.size * 0.72
+			kind, txt := 1, r.Sup
+			if r.Sub != "" {
+				kind, txt = 2, r.Sub
+			}
+			out = append(out, mdPiece{text: txt, sp: sp, script: kind})
+			continue
+		}
+		// 脚注引用（做成上标可点击）
+		if r.FnRef != "" {
+			sp := base
+			sp.size = base.size * 0.7
+			sp.color = mdColLink
+			sp.link = "fn:" + r.FnRef
+			out = append(out, mdPiece{text: "[" + r.FnRef + "]", sp: sp, script: 1})
 			continue
 		}
 		sp := mdRunSpan(r, base, o)
@@ -418,6 +487,10 @@ func mdSplitByWidth(p mdPiece, width float32) []mdPiece {
 
 // mdPieceNode 把一个排版片段转成节点。
 func mdPieceNode(p mdPiece) *Node {
+	// 行内公式：直接返回固定尺寸的排版盒
+	if p.math != nil {
+		return matBoxNode(*p.math)
+	}
 	if p.text == "" {
 		return nil
 	}
@@ -433,14 +506,33 @@ func mdPieceNode(p mdPiece) *Node {
 	}
 	n := Text(p.text).St(st)
 	if p.sp.link != "" {
-		href := p.sp.link
-		n.Tap(func() { mdOpenURL(href) })
-		TooltipOf(n, href)
+		link := p.sp.link
+		if strings.HasPrefix(link, "fn:") {
+			id := strings.TrimPrefix(link, "fn:")
+			n.Tap(func() { mdScrollToAnchor("fn-" + id) })
+			TooltipOf(n, "查看脚注 "+id)
+		} else {
+			n.Tap(func() { mdOpenURL(link) })
+			TooltipOf(n, link)
+		}
 	}
 	if p.sp.strike {
 		w := mdPieceWidth(mdPiece{text: p.text, sp: p.sp})
 		line := Box().St(St().W(w).H(1).BgC(mdColMuted).AbsCenter())
 		n = Stack(n, line)
+	}
+	// 上标 / 下标：外框固定高度，文字用绝对定位上下微移
+	if p.script != 0 {
+		w := mdPieceWidth(p)
+		ih := p.sp.size * 1.2
+		dy := -p.sp.size * 0.46
+		h := p.sp.size * 0.95
+		if p.script == 2 {
+			dy = p.sp.size * 0.30
+			h = p.sp.size * 1.15
+		}
+		n.St(St().AbsTL(0, dy).W(w).H(ih).Lh(ih))
+		return Stack(n).St(St().W(w + 0.5).H(h))
 	}
 	return n
 }
@@ -485,6 +577,14 @@ type mdRenderer struct {
 }
 
 // Markdown 渲染 Markdown 文档。
+//
+// 渲染树按 (窗口, 节点 Key, 源文, 宽度, 渲染缩放, 主题, 交互状态版本, 排版选项) 缓存：
+// 旧实现每帧都把整篇文档重新排版成上千个节点（字符串拼接 + 语法高亮 + 文本测量），
+// 长文档滚动时这一项就吃掉大半帧预算。缓存后每帧只做一次 map 查找 + 复制一层子节点指针。
+//
+// 复用同一批 *Node 是安全的：布局每帧都会重写 Frame/Parent/wrapW/ContentH，
+// 悬停/按下由 App 按指针写入、本库不读取 Node.Hover/Pressed，
+// 交互状态（页签/折叠/详情）通过 mdStateRev 参与缓存键。
 func Markdown(key, src string, opts ...MarkdownOptions) *Node {
 	o := MarkdownOptions{}
 	if len(opts) > 0 {
@@ -501,17 +601,127 @@ func Markdown(key, src string, opts ...MarkdownOptions) *Node {
 			w = 240
 		}
 	}
-	prevLink := mdLinkHandler
-	if o.OnLink != nil {
-		mdLinkHandler = o.OnLink
+	app := Current()
+	mk := mdTreeKey{
+		app:    app,
+		key:    key,
+		src:    src,
+		width:  int32(w*2 + 0.5),
+		scale:  int32(mdScaleOf(app)*100 + 0.5),
+		theme:  curTheme.Name,
+		rev:    mdStateRev,
+		base:   int32(base.size*2 + 0.5),
+		line:   int32(o.LineHeight*2 + 0.5),
+		maxImg: int32(o.MaxImageHeight*2 + 0.5),
+		codes:  o.CodeMaxLines,
+		family: o.FontFamily,
+		mono:   o.MonoFamily,
+		noTOC:  o.NoTOC,
 	}
-	r := &mdRenderer{doc: mdParseCached(src), opts: o, width: w, base: base, key: key}
-	kids := r.renderBlocks(r.doc.Blocks)
-	mdLinkHandler = prevLink
+
+	kids, hit := mdTreeCache[mk]
+	if !hit {
+		prevLink := mdLinkHandler
+		if o.OnLink != nil {
+			mdLinkHandler = o.OnLink
+		}
+		r := &mdRenderer{doc: mdParseCached(src), opts: o, width: w, base: base, key: key}
+		kids = r.renderBlocks(r.doc.Blocks)
+		// 文末脚注区
+		if fn := r.footnotes(); fn != nil {
+			kids = append(kids, Box().St(St().H(8)), fn)
+		}
+		mdLinkHandler = prevLink
+		// 超大文档不缓存：避免一篇几万节点的文档把渲染树常驻在内存里
+		if mdCountNodes(kids) <= mdTreeCacheMaxNodes {
+			if len(mdTreeCache) >= mdTreeCacheMaxKeys {
+				mdTreeCache = map[mdTreeKey][]*Node{}
+			}
+			mdTreeCache[mk] = kids
+		}
+	}
+
+	// 每帧复制一层子节点指针：返回的 Children 是独立切片，
+	// 追加 toast 或下游布局都不会污染缓存
+	out := make([]*Node, 0, len(kids)+1)
+	out = append(out, kids...)
 	if t := mdToastNode(); t != nil {
-		kids = append(kids, t)
+		out = append(out, t)
 	}
-	return Column(kids...).St(St().W(w).GapOf(0)).K(key)
+	return Column(out...).St(St().W(w).GapOf(0)).K(key)
+}
+
+// ---- 渲染树缓存 ----
+
+// mdTreeKey 渲染树缓存键。任何影响排版结果的输入都必须在此出现，
+// 否则会出现「切主题/改宽度/换页签后画面不更新」。
+type mdTreeKey struct {
+	app    *App // 多窗口隔离：节点 Frame/Parent 是每窗口各自的布局状态
+	key    string
+	src    string
+	width  int32 // 量化到 0.5px，避免浮点抖动导致永不命中
+	scale  int32 // 渲染缩放 ×100：字形度量参与折行/列宽计算
+	theme  string
+	rev    uint64 // mdStateRev：页签/折叠/详情等交互状态
+	base   int32
+	line   int32
+	maxImg int32
+	codes  int
+	family string
+	mono   string
+	noTOC  bool
+}
+
+const (
+	// mdTreeCacheMaxKeys 缓存文档数上限（超出整体丢弃）。
+	mdTreeCacheMaxKeys = 6
+	// mdTreeCacheMaxNodes 单篇文档节点数上限（超过则不缓存）。
+	mdTreeCacheMaxNodes = 6000
+)
+
+var mdTreeCache = map[mdTreeKey][]*Node{}
+
+// mdDropTreeCache 丢弃某个窗口的渲染树缓存（窗口销毁时调用）。
+// 缓存键里有 *App，不清掉会让已关闭窗口的节点树与 App 一直常驻。
+func mdDropTreeCache(a *App) {
+	if a == nil || len(mdTreeCache) == 0 {
+		return
+	}
+	for k := range mdTreeCache {
+		if k.app == a {
+			delete(mdTreeCache, k)
+		}
+	}
+}
+
+// mdScaleOf 取窗口的渲染缩放（无窗口环境按 1 处理，保证单测稳定）。
+func mdScaleOf(a *App) float32 {
+	if a == nil {
+		return 1
+	}
+	if s := a.effScale(); s > 0 {
+		return s
+	}
+	return 1
+}
+
+// mdCountNodes 统计子树节点数（仅缓存未命中时调用一次）。
+func mdCountNodes(ns []*Node) int {
+	total := 0
+	var walk func(n *Node)
+	walk = func(n *Node) {
+		if n == nil {
+			return
+		}
+		total++
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	for _, n := range ns {
+		walk(n)
+	}
+	return total
 }
 
 // ---- 解析缓存（同一内容不重复解析，流式输出时收益明显） ----
@@ -557,7 +767,7 @@ func mdBlockGap(b *mdBlock) float32 {
 			return 18
 		}
 		return 14
-	case mdCode, mdTable, mdTabs, mdDetails, mdCard, mdGallery:
+	case mdCode, mdTable, mdTabs, mdDetails, mdCard, mdGallery, mdMath, mdMermaid, mdDefList:
 		return 12
 	case mdHR:
 		return 10
@@ -602,8 +812,171 @@ func (r *mdRenderer) renderBlock(b *mdBlock, idx int) *Node {
 			return nil
 		}
 		return r.toc()
+	case mdMath:
+		return r.mathBlock(b)
+	case mdMermaid:
+		return r.mermaid(b)
+	case mdDefList:
+		return r.defList(b)
 	}
 	return nil
+}
+
+// mathBlock 块级公式：居中展示 + 复制源码。
+func (r *mdRenderer) mathBlock(b *mdBlock) *Node {
+	src := strings.TrimSpace(b.Math)
+	if src == "" {
+		return nil
+	}
+	size := r.base.size + 1.5
+	node := mdMathTypeset(src, size, r.base.family, mdColText, true)
+	if node == nil {
+		// 排版失败（语法过偏）：退化为等宽代码块，至少内容不丢
+		fallback := &mdBlock{Kind: mdCode, Lang: "latex", Code: src}
+		return r.codeBlock(fallback, -1)
+	}
+	copyBtn := Text("复制").St(St().Text(10.5, 500, mdColMuted).PadXY(7, 3).R(6).BgC(ColHover))
+	code := src
+	copyBtn.Tap(func() {
+		if ClipboardSetText(code) {
+			mdToast("公式已复制")
+		} else {
+			mdToast("复制失败")
+		}
+	})
+	return Column(
+		Row(Spacer(), copyBtn).St(St().PadOnly(6, 10, 0, 0)),
+		Row(node).Grow(1).JustifyTo(AlignCenter).St(St().Padding(12)),
+	).St(St().R(10).BgC(mdColBgSoft).Stroke(1, mdColBorder))
+}
+
+// mermaid 图表块：GoGUI 没有 JS 运行环境，降级为「图表提示卡」，
+// 展示图类型、行数与源码（可复制），并提示到浏览器版本查看。
+func (r *mdRenderer) mermaid(b *mdBlock) *Node {
+	kind, desc := mdMermaidKind(b.Code)
+	// flowchart / graph：用原生节点 + 正交连线真正画出来
+	if g, ok := mmParse(b.Code); ok {
+		if view, ok2 := mmView(g, r.width-24, r.base.size+0.5, r.opts.FontFamily,
+			r.key+"-mm-"+strconv.Itoa(len(b.Code))); ok2 {
+			copy2 := Text("复制源码").St(St().Text(11, 500, mdColAccent).PadXY(9, 4).R(7).
+				BgC("rgba(129,140,248,0.12)"))
+			src := b.Code
+			copy2.Tap(func() {
+				if ClipboardSetText(src) {
+					mdToast("Mermaid 源码已复制")
+				} else {
+					mdToast("复制失败")
+				}
+			})
+			return Column(
+				Row(
+					Text("◇").St(St().Text(14, 600, "#67e8f9")),
+					Text(kind).St(St().Text(r.base.size-0.5, 600, mdColText)),
+					Text("· "+strconv.Itoa(len(g.nodes))+" 节点 / "+strconv.Itoa(len(g.edges))+" 连线").
+						St(St().Text(r.base.size-2, 400, mdColMuted)),
+					Spacer(),
+					copy2,
+				).St(St().GapOf(8)).AlignTo(AlignCenter),
+				Text(desc).St(St().Text(r.base.size-2, 400, mdColMuted).WrapOn().PadOnly(4, 0, 0, 0)),
+				Row(view).JustifyTo(AlignCenter).St(St().PadOnly(8, 0, 2, 0)),
+			).St(St().Padding(12).GapOf(6).R(10).BgC(mdColBgSoft).Stroke(1, mdColBorder))
+		}
+	}
+	lines := strings.Count(strings.TrimSpace(b.Code), "\n") + 1
+	code := b.Code
+	copyBtn := Text("复制源码").St(St().Text(11, 500, mdColAccent).PadXY(9, 4).R(7).
+		BgC("rgba(129,140,248,0.12)"))
+	copyBtn.Tap(func() {
+		if ClipboardSetText(code) {
+			mdToast("Mermaid 源码已复制")
+		} else {
+			mdToast("复制失败")
+		}
+	})
+	// 源码预览：最多 8 行
+	preview := strings.Split(strings.TrimSpace(b.Code), "\n")
+	if len(preview) > 8 {
+		preview = append(preview[:8], "…")
+	}
+	var codeLines []*Node
+	for _, l := range preview {
+		codeLines = append(codeLines, Text(l).St(St().Text(r.base.size-2, 400, mdColMuted).
+			Font(mdMono(r.opts)).WrapOn()))
+	}
+	return Column(
+		Row(
+			Text("◇").St(St().Text(14, 600, "#67e8f9")),
+			Text(kind).St(St().Text(r.base.size-0.5, 600, mdColText)),
+			Text("· "+strconv.Itoa(lines)+" 行").St(St().Text(r.base.size-2, 400, mdColMuted)),
+			Spacer(),
+			copyBtn,
+		).St(St().GapOf(8)).AlignTo(AlignCenter),
+		Text(desc).St(St().Text(r.base.size-2, 400, mdColMuted).WrapOn().PadOnly(4, 0, 0, 0)),
+		Column(codeLines...).St(St().GapOf(1).PadOnly(8, 10, 8, 10).R(8).BgC(mdColCodeBg).Clipped()),
+		Text("桌面端原生绘制 flowchart / graph；时序图、类图、甘特图请复制源码到 mermaid.live 查看").St(
+			St().Text(r.base.size-2.5, 400, mdColMuted).WrapOn()),
+	).St(St().Padding(12).GapOf(8).R(10).BgC(mdColBgSoft).Stroke(1, mdColBorder))
+}
+
+// mdMermaidKind 识别 Mermaid 图类型（首行关键字）。
+func mdMermaidKind(src string) (string, string) {
+	first := ""
+	for _, l := range strings.Split(src, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			first = strings.ToLower(t)
+			break
+		}
+	}
+	switch {
+	case strings.HasPrefix(first, "graph"), strings.HasPrefix(first, "flowchart"):
+		return "流程图 Flowchart", "节点与连线的有向/无向图"
+	case strings.HasPrefix(first, "sequencediagram"):
+		return "时序图 Sequence", "参与者之间的消息时序"
+	case strings.HasPrefix(first, "classdiagram"):
+		return "类图 Class", "类型、属性与继承关系"
+	case strings.HasPrefix(first, "statediagram"):
+		return "状态图 State", "状态机迁移"
+	case strings.HasPrefix(first, "erdiagram"):
+		return "实体关系 ER", "表结构与关联"
+	case strings.HasPrefix(first, "gantt"):
+		return "甘特图 Gantt", "任务排期与依赖"
+	case strings.HasPrefix(first, "pie"):
+		return "饼图 Pie", "占比构成"
+	case strings.HasPrefix(first, "journey"):
+		return "用户旅程 Journey", "分阶段体验流程"
+	case strings.HasPrefix(first, "gitgraph"):
+		return "Git 图", "分支与提交历史"
+	case strings.HasPrefix(first, "mindmap"):
+		return "思维导图 Mindmap", "中心主题的层级展开"
+	}
+	return "Mermaid 图表", "未识别的图类型，按源码展示"
+}
+
+// defList 定义列表。
+func (r *mdRenderer) defList(b *mdBlock) *Node {
+	rows := make([]*Node, 0, len(b.Defs)*2)
+	for _, d := range b.Defs {
+		term := Column(mdInlineNodes(d.Term, r.width-r.base.size*6, mdSpan{
+			size: r.base.size, weight: 600, family: r.opts.FontFamily, color: mdColText,
+		}, r.opts, 0)...).St(St().GapOf(mdLineGap(r.opts, r.base.size)))
+		defs := make([]*Node, 0, len(d.Defs)*2)
+		for i, def := range d.Defs {
+			body := mdInlineNodes(def, r.width-r.base.size*7, r.base, r.opts, 0)
+			defs = append(defs, Row(
+				Text(mdDefMark(i)).St(St().Text(r.base.size, 500, mdColAccent).W(r.base.size*1.2)),
+				Column(body...).Grow(1).St(St().GapOf(mdLineGap(r.opts, r.base.size))),
+			).AlignTo(AlignStart))
+		}
+		rows = append(rows, term, Column(defs...).St(St().GapOf(2).PadOnly(3, 0, 5, r.base.size*1.4)))
+	}
+	return Column(rows...).St(St().GapOf(4))
+}
+
+func mdDefMark(i int) string {
+	if i == 0 {
+		return "："
+	}
+	return "·"
 }
 
 // heading 标题（字号/字重随级别变化，带锚点色条）。
@@ -631,18 +1004,126 @@ func (r *mdRenderer) heading(b *mdBlock, idx int) *Node {
 	if b.Level == 1 {
 		// h1 下面带一条渐隐分隔线
 		kids := mdInlineNodes(b.Inl, r.width, mdSpan{size: size, weight: weight, family: r.opts.FontFamily, color: color}, r.opts, 0)
-		return Column(kids...).St(St().GapOf(1))
+		return r.anchorNode(b, Column(kids...).St(St().GapOf(1)))
 	}
 	base := r.base
 	base.size = size
 	base.weight = weight
 	base.color = color
-	return Column(mdInlineNodes(b.Inl, r.width, base, r.opts, 0)...)
+	return r.anchorNode(b, Column(mdInlineNodes(b.Inl, r.width, base, r.opts, 0)...))
+}
+
+// anchorNode 给标题挂锚点 Key 并登记，供目录点击滚动定位。
+func (r *mdRenderer) anchorNode(b *mdBlock, n *Node) *Node {
+	if b.Key == "" {
+		return n
+	}
+	n.K(mdAnchorID(r.key, b.Key))
+	if mdState.anchors == nil {
+		mdState.anchors = map[string]*Node{}
+	}
+	if len(mdState.anchors) > 4096 {
+		mdState.anchors = map[string]*Node{}
+	}
+	mdState.anchors[mdAnchorID(r.key, b.Key)] = n
+	return n
+}
+
+// mdAnchorID 锚点在全局表里的唯一键（同一篇文档多个实例共存时按渲染 Key 区分）。
+func mdAnchorID(docKey, anchor string) string { return docKey + "|" + anchor }
+
+// mdScrollToAnchor 把锚点节点滚动到最近的滚动容器顶部。
+// 节点 Frame 是上一帧布局结果，点击回调发生在事件分发阶段，二者一致。
+func mdScrollToAnchor(id string) {
+	n := mdState.anchors[id]
+	if n == nil {
+		mdToast("锚点未找到")
+		return
+	}
+	a := Current()
+	if a == nil {
+		return
+	}
+	var sc *Node
+	for p := n.Parent; p != nil; p = p.Parent {
+		if p.Kind == KScroll && p.Key != "" {
+			sc = p
+			break
+		}
+	}
+	if sc == nil {
+		mdToast("当前不在滚动容器内")
+		return
+	}
+	off := n.Frame.Y - sc.Frame.Y + a.scrolls[sc.Key] - 10
+	if off < 0 {
+		off = 0
+	}
+	max := sc.ContentH - sc.Frame.H
+	if max < 0 {
+		max = 0
+	}
+	a.setScrollTarget(sc.Key, off, max)
+	a.scrollIdle = 0
+	a.dirty = true
+	RequestRedraw()
 }
 
 func (r *mdRenderer) paragraph(b *mdBlock) *Node {
+	// 单独成段的裸链接 → 链接卡片
+	if n := r.linkCard(b); n != nil {
+		return n
+	}
 	kids := mdInlineNodes(b.Inl, r.width, r.base, r.opts, 0)
 	return Column(kids...).St(St().GapOf(mdLineGap(r.opts, r.base.size)))
+}
+
+// linkCard 单独成段的 URL 渲染为链接卡（域名 + 路径 + 打开提示）。
+func (r *mdRenderer) linkCard(b *mdBlock) *Node {
+	url := ""
+	for _, run := range b.Inl {
+		if run.Br || run.FnRef != "" || run.Math != "" {
+			return nil
+		}
+		href := strings.TrimSpace(run.Href)
+		if run.Link && href != "" && strings.TrimSpace(run.Text) == href && mdLooseURLRe.MatchString(href) {
+			if url != "" {
+				return nil
+			}
+			url = href
+			continue
+		}
+		if strings.TrimSpace(run.Text) != "" {
+			return nil
+		}
+	}
+	if url == "" {
+		return nil
+	}
+	domain, path := mdSplitURL(url)
+	row := Row(
+		Text("🔗").St(St().Text(r.base.size+3, 400, mdColMuted).W(26).TAlign(AlignCenter)),
+		Column(
+			Text(domain).St(St().Text(r.base.size, 600, mdColLink)),
+			Text(path).St(St().Text(r.base.size-2, 400, mdColMuted).WrapOn()),
+		).Grow(1).St(St().GapOf(2)),
+		Text("打开 ↗").St(St().Text(r.base.size-2, 500, mdColMuted)),
+	).St(St().GapOf(10).Padding(11).R(9).BgC(mdColBgSoft).Stroke(1, mdColBorder)).
+		AlignTo(AlignCenter).Tap(func() { mdOpenURL(url) })
+	TooltipOf(row, "在浏览器中打开 "+url)
+	return row
+}
+
+// mdSplitURL 拆出域名与路径（不引入 net/url，避免无谓分配）。
+func mdSplitURL(u string) (string, string) {
+	s := u
+	for _, pre := range []string{"https://", "http://"} {
+		s = strings.TrimPrefix(s, pre)
+	}
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		return s[:i], u
+	}
+	return s, u
 }
 
 // mdLineGap 行间距：优先用 MarkdownOptions.LineHeight，否则按字号推算。
@@ -694,16 +1175,79 @@ func (r *mdRenderer) codeBlock(b *mdBlock, idx int) *Node {
 	if monoFont != nil {
 		numW = monoFont.Measure(strings.Repeat("0", digits)) + 16
 	}
-	codeW := r.width - numW - 28
+	codeAvail := r.width - numW - 28
+	codeW := codeAvail
+	if r.opts.CodeNoWrap {
+		// 不折行：按最长行撑开宽度，超出的部分通过横向平移查看
+		maxLine := float32(0)
+		for _, spans := range shown {
+			var lw float32
+			for _, s := range spans {
+				if f := mdFont(size, 400, mono); f != nil {
+					lw += f.Measure(s.Text)
+				}
+			}
+			if lw > maxLine {
+				maxLine = lw
+			}
+		}
+		if maxLine > codeW {
+			codeW = maxLine + 2
+		}
+	}
 
 	var rows []*Node
 	for i, spans := range shown {
 		num := Text(strconv.Itoa(i + 1)).St(St().Text(size-0.5, 400, mdColMuted).Font(mono).W(numW).TAlign(AlignEnd).Lh(lineH))
 		code := r.codeLine(spans, codeW, mono, size, lineH)
-		rows = append(rows, Row(num, code).St(St().GapOf(10)).AlignTo(AlignStart))
+		rowSt := St().GapOf(10)
+		switch mdDiffKind(spans) {
+		case "add":
+			rowSt.BgC("rgba(52,211,153,0.10)")
+		case "del":
+			rowSt.BgC("rgba(248,113,113,0.10)")
+		case "meta":
+			rowSt.BgC("rgba(56,189,248,0.08)")
+		}
+		rows = append(rows, Row(num, code).St(rowSt).AlignTo(AlignStart))
 	}
 
 	body := Column(rows...).St(St().GapOf(1).PadXY(14, 12))
+
+	// 横向平移（不折行模式）：内容比可视区宽时，用头部左右按钮/拖动移动
+	panKey := key + "-x"
+	maxPan := codeW - codeAvail
+	if r.opts.CodeNoWrap && maxPan > 0 {
+		x := mdState.codeX[panKey]
+		if x > maxPan {
+			x = maxPan
+		}
+		if x < 0 {
+			x = 0
+		}
+		bodyH := float32(0)
+		for range rows {
+			bodyH += lineH + 1
+		}
+		inner := body.St(St().AbsTL(-x, 0).W(codeW + 28))
+		view := Box(inner).St(St().W(codeAvail + 28).H(bodyH + 2).Clipped())
+		// 拖动平移：按下后按水平位移比例移动
+		view.DragEvt(func(px, _ float32) {
+			if codeAvail <= 0 {
+				return
+			}
+			nx := x + (px/maxPan-1)*4
+			if nx < 0 {
+				nx = 0
+			}
+			if nx > maxPan {
+				nx = maxPan
+			}
+			mdState.codeX[panKey] = nx
+			RequestRedraw()
+		})
+		body = view
+	}
 
 	// 头部：语言 + 复制 + 折叠
 	langLabel := strings.ToUpper(strings.TrimSpace(b.Lang))
@@ -714,7 +1258,7 @@ func (r *mdRenderer) codeBlock(b *mdBlock, idx int) *Node {
 		BgC(ColHover).Stroke(1, ColHover))
 	code := b.Code
 	copyBtn.Tap(func() {
-		if win32.SetClipboardText(code) {
+		if ClipboardSetText(code) {
 			mdToast("代码已复制")
 		} else {
 			mdToast("复制失败")
@@ -724,6 +1268,25 @@ func (r *mdRenderer) codeBlock(b *mdBlock, idx int) *Node {
 		Text(langLabel).St(St().Text(10.5, 600, mdColMuted).Font(mono)),
 		Spacer(),
 	}
+	if r.opts.CodeNoWrap && codeW > codeAvail {
+		pan := func(delta float32) {
+			x := mdState.codeX[panKey] + delta
+			maxPan2 := codeW - codeAvail
+			if x < 0 {
+				x = 0
+			}
+			if x > maxPan2 {
+				x = maxPan2
+			}
+			mdState.codeX[panKey] = x
+			RequestRedraw()
+		}
+		l := Text("‹").St(St().Text(12, 700, mdColMuted).PadXY(7, 2).R(6).BgC(ColHover))
+		l.Tap(func() { pan(-codeAvail * 0.6) })
+		rr := Text("›").St(St().Text(12, 700, mdColMuted).PadXY(7, 2).R(6).BgC(ColHover))
+		rr.Tap(func() { pan(codeAvail * 0.6) })
+		headKids = append(headKids, l, rr)
+	}
 	if folded {
 		n := len(lines) - maxLines
 		expand := Text("展开 " + strconv.Itoa(n) + " 行").St(St().Text(11, 500, mdColAccent).PadXY(8, 3).R(6).
@@ -731,6 +1294,7 @@ func (r *mdRenderer) codeBlock(b *mdBlock, idx int) *Node {
 		k := key
 		expand.Tap(func() {
 			mdState.folded[k] = true
+			mdTouchState()
 			RequestRedraw()
 		})
 		headKids = append(headKids, expand)
@@ -740,6 +1304,7 @@ func (r *mdRenderer) codeBlock(b *mdBlock, idx int) *Node {
 		k := key
 		collapse.Tap(func() {
 			delete(mdState.folded, k)
+			mdTouchState()
 			RequestRedraw()
 		})
 		headKids = append(headKids, collapse)
@@ -842,8 +1407,26 @@ func mdCodeColor(kind string) string {
 		return mdSynTag
 	case "punc":
 		return mdSynPunc
+	case "add":
+		return "#7ee2a8"
+	case "del":
+		return "#ff9aa2"
+	case "meta":
+		return mdSynBi
 	}
 	return mdSynText
+}
+
+// mdDiffKind 取整行的 diff 语义（用于行底色）。
+func mdDiffKind(spans []mdHLSpan) string {
+	if len(spans) == 0 {
+		return ""
+	}
+	switch spans[0].Kind {
+	case "add", "del", "meta":
+		return spans[0].Kind
+	}
+	return ""
 }
 
 // list 列表（支持嵌套、有序、任务列表）。
@@ -863,16 +1446,28 @@ func (r *mdRenderer) list(b *mdBlock, idx, depth int) *Node {
 		}
 		var mk *Node
 		if it.Task >= 0 {
+			tk := r.key + "-task-" + strconv.Itoa(idx) + "-" + strconv.Itoa(i)
+			checked := it.Task == 1
+			if v, ok := mdState.checks[tk]; ok {
+				checked = v
+			}
 			box := ColHover
 			mark := ""
-			if it.Task == 1 {
+			if checked {
 				box = mdColAccent
 				mark = "√"
 			}
 			mk = Stack(
 				Box().St(St().AbsFill().R(4).BgC(box).Stroke(1, mdColBorder)),
 				Text(mark).St(St().AbsFill().Text(10, 700, "#ffffff").CenterYOn().TAlign(AlignCenter)),
-			).St(St().W(14).H(14).MarOnly(4, 6, 0, 6))
+			).St(St().W(14).H(14).MarOnly(4, 6, 0, 6)).Tap(func() {
+				if mdState.checks == nil {
+					mdState.checks = map[string]bool{}
+				}
+				mdState.checks[tk] = !checked
+				mdTouchState()
+				RequestRedraw()
+			})
 		} else {
 			mk = Text(marker).St(St().Text(r.base.size, 500, mdColAccent).W(22).TAlign(AlignEnd).
 				Lh(r.base.size*1.65).MarOnly(0, 8, 0, 0))
@@ -946,14 +1541,13 @@ func (r *mdRenderer) imageNode(src, alt, captionColor string) *Node {
 	if maxH <= 0 {
 		maxH = 360
 	}
-	w0, h0 := ImageSize(src)
+	local, ok := mdImagePath(src)
+	if !ok {
+		return r.imagePlaceholder(src, alt)
+	}
+	w0, h0 := ImageSize(local)
 	if w0 <= 0 || h0 <= 0 {
-		// 远程 / 不存在的图片：显示占位卡
-		return Column(
-			Text("🖼  图片").St(St().Text(11.5, 600, mdColMuted)),
-			Text(src).St(St().Text(11, 400, mdColMuted).WrapOn()),
-			Text("GoGUI 仅支持本地图片（PNG / JPEG / GIF / BMP）").St(St().Text(10.5, 400, mdColMuted)),
-		).St(St().GapOf(4).Padding(14).R(10).BgC(mdColBgSoft).Stroke(1, mdColBorder))
+		return r.imagePlaceholder(src, alt)
 	}
 	w, h := float32(w0), float32(h0)
 	if h > maxH {
@@ -964,8 +1558,8 @@ func (r *mdRenderer) imageNode(src, alt, captionColor string) *Node {
 		h *= r.width / w
 		w = r.width
 	}
-	img := ImageSized(src, w, h).St(St().R(8))
-	s := src
+	img := ImageSized(local, w, h).St(St().R(8))
+	s := local
 	a := alt
 	img.Tap(func() {
 		mdState.viewer.Open = true
@@ -978,6 +1572,35 @@ func (r *mdRenderer) imageNode(src, alt, captionColor string) *Node {
 		col.Add(Text(alt).St(St().Text(11.5, 400, captionColor).TAlign(AlignCenter).WrapOn()))
 	}
 	return col.St(St().GapOf(6))
+}
+
+// imagePlaceholder 无法显示的图片 → 占位卡（区分「下载中 / 失败 / 非本地路径」）。
+func (r *mdRenderer) imagePlaceholder(src, alt string) *Node {
+	hint := "GoGUI 仅支持本地图片（PNG / JPEG / GIF / BMP）"
+	icon := "🖼"
+	if mdIsRemote(src) {
+		switch {
+		case mdRemotePending(src):
+			hint = "正在下载远程图片…（完成后自动刷新画面）"
+			RequestRedraw()
+		default:
+			if msg := mdRemoteError(src); msg != "" {
+				hint = "远程图片加载失败：" + msg
+			} else {
+				hint = "远程图片未就绪"
+			}
+		}
+		icon = "🌐"
+	}
+	col := Column(
+		Row(
+			Text(icon).St(St().Text(13, 400, mdColMuted)),
+			Text(alt).St(St().Text(11.5, 600, mdColMuted).WrapOn()),
+		).St(St().GapOf(6)).AlignTo(AlignStart),
+		Text(src).St(St().Text(10.5, 400, mdColMuted).WrapOn()),
+		Text(hint).St(St().Text(10.5, 400, mdColMuted).WrapOn()),
+	).St(St().GapOf(4).Padding(14).R(10).BgC(mdColBgSoft).Stroke(1, mdColBorder))
+	return col
 }
 
 // table 表格（列宽按内容比例分配，单元格内折行）。
@@ -1002,14 +1625,42 @@ func (r *mdRenderer) table(b *mdBlock) *Node {
 	}
 	widths := mdDistributeWidths(desired, r.width, 64)
 
+	// 纯数字列自动右对齐（含百分号/单位后缀也算数字）
+	numCol := make([]bool, cols)
+	for i := range numCol {
+		numCol[i] = true
+		seen := 0
+		for _, row := range b.Table.Rows {
+			if i >= len(row) {
+				continue
+			}
+			txt := strings.TrimSpace(inlineText(row[i].Inl))
+			if txt == "" {
+				continue
+			}
+			seen++
+			if !mdIsNumeric(txt) {
+				numCol[i] = false
+				break
+			}
+		}
+		if seen == 0 {
+			numCol[i] = false
+		}
+	}
+
 	var rows []*Node
 	headCells := make([]*Node, 0, cols)
 	for i, c := range b.Table.Header {
 		sp := r.base
 		sp.weight = 600
 		sp.color = mdColText
+		align := c.Align
+		if numCol[i] && align == AlignStart {
+			align = AlignEnd
+		}
 		kids := mdInlineNodes(c.Inl, widths[i]-padX*2, sp, r.opts, 0)
-		headCells = append(headCells, Column(kids...).St(St().W(widths[i]).PadXY(padX, 8).TAlign(c.Align)))
+		headCells = append(headCells, Column(kids...).St(St().W(widths[i]).PadXY(padX, 8).TAlign(align)))
 	}
 	rows = append(rows, Row(headCells...).St(St().BgC(mdColBgSoft)))
 
@@ -1024,8 +1675,12 @@ func (r *mdRenderer) table(b *mdBlock) *Node {
 			if i < len(row) {
 				c = row[i]
 			}
+			align := c.Align
+			if numCol[i] && align == AlignStart {
+				align = AlignEnd
+			}
 			kids := mdInlineNodes(c.Inl, widths[i]-padX*2, r.base, r.opts, 0)
-			cells = append(cells, Column(kids...).St(St().W(widths[i]).PadXY(padX, 8)))
+			cells = append(cells, Column(kids...).St(St().W(widths[i]).PadXY(padX, 8).TAlign(align)))
 		}
 		rows = append(rows, Row(cells...).St(St().BgC(bg)))
 		rows = append(rows, Divider())
@@ -1045,6 +1700,25 @@ func mdPlainWidth(runs []mdInline, base mdSpan, o MarkdownOptions) float32 {
 		w += mdPieceWidth(p)
 	}
 	return w
+}
+
+// mdIsNumeric 判断是否为纯数字（表格列右对齐用）。
+func mdIsNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	digits := 0
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r == '.' || r == ',' || r == '%' || r == '+' || r == '-' || r == ' ' || r == '/':
+			continue
+		default:
+			return false
+		}
+	}
+	return digits > 0
 }
 
 // mdDistributeWidths 按期望宽度比例分配可用宽度（带最小值）。
@@ -1117,6 +1791,7 @@ func (r *mdRenderer) tabs(b *mdBlock, idx int) *Node {
 		n := Text(t.Label).St(St().Text(r.base.size-0.5, 500, color).PadXY(12, 6).R(7).BgC(bg))
 		n.Tap(func() {
 			mdState.tabs[key] = i
+			mdTouchState()
 			RequestRedraw()
 		})
 		heads = append(heads, n)
@@ -1154,6 +1829,7 @@ func (r *mdRenderer) details(b *mdBlock, idx int) *Node {
 	k := key
 	head.Tap(func() {
 		mdState.details[k] = !open
+		mdTouchState()
 		RequestRedraw()
 	})
 	col := Column(head.St(St().R(8).BgC(mdColBgSoft)))
@@ -1174,16 +1850,19 @@ func (r *mdRenderer) card(b *mdBlock, idx int) *Node {
 	}
 	col := Column()
 	if c.Image != "" {
-		if w, h := ImageSize(c.Image); w > 0 && h > 0 {
-			ih := float32(150)
-			iw := r.width * ih / float32(h)
-			if iw < r.width*0.3 {
-				iw = r.width * 0.3
+		local, ok := mdImagePath(c.Image)
+		if ok {
+			if w, h := ImageSize(local); w > 0 && h > 0 {
+				ih := float32(150)
+				iw := r.width * ih / float32(h)
+				if iw < r.width*0.3 {
+					iw = r.width * 0.3
+				}
+				if iw > r.width {
+					iw = r.width
+				}
+				col.Add(ImageSized(local, iw, ih))
 			}
-			if iw > r.width {
-				iw = r.width
-			}
-			col.Add(ImageSized(c.Image, iw, ih))
 		}
 	}
 	head := Column()
@@ -1285,7 +1964,11 @@ func (r *mdRenderer) gallery(b *mdBlock, idx int) *Node {
 	thumbH := thumbW * 0.66
 	items := make([]*Node, 0, len(b.Gallery))
 	for _, img := range b.Gallery {
-		w0, h0 := ImageSize(img.Src)
+		local, ok := mdImagePath(img.Src)
+		w0, h0 := 0, 0
+		if ok {
+			w0, h0 = ImageSize(local)
+		}
 		if w0 <= 0 || h0 <= 0 {
 			items = append(items, Column(
 				Text("🖼").St(St().Text(16, 400, mdColMuted).TAlign(AlignCenter)),
@@ -1293,7 +1976,7 @@ func (r *mdRenderer) gallery(b *mdBlock, idx int) *Node {
 			).St(St().W(thumbW).H(thumbH).Padding(6).R(8).BgC(mdColBgSoft)))
 			continue
 		}
-		src, alt := img.Src, img.Alt
+		src, alt := local, img.Alt
 		im := ImageSized(src, thumbW, thumbH).St(St().R(8))
 		im.Tap(func() {
 			mdState.viewer.Open = true
@@ -1349,15 +2032,50 @@ func (r *mdRenderer) toc() *Node {
 		if h.Level == 1 {
 			size = r.base.size
 		}
-		items = append(items, Row(
+		anchor := mdAnchorID(r.key, h.Key)
+		row := Row(
 			Box().St(St().W(4).H(4).R(2).BgC(mdColAccent)),
 			Text(h.Text).St(St().Text(size, 500, mdColDim).WrapOn()),
-		).St(St().GapOf(8).PadOnly(2, 0, 2, indent)).AlignTo(AlignStart))
+		).St(St().GapOf(8).PadOnly(2, 0, 2, indent)).AlignTo(AlignStart).
+			Tap(func() { mdScrollToAnchor(anchor) })
+		TooltipOf(row, "跳转到该小节")
+		items = append(items, row)
 	}
 	return Column(
-		Text("目录").St(St().Text(r.base.size-1, 600, mdColMuted)),
+		Row(
+			Text("目录").St(St().Text(r.base.size-1, 600, mdColMuted)),
+			Spacer(),
+			Text(strconv.Itoa(len(r.doc.Headings))+" 节").St(St().Text(r.base.size-2, 400, mdColMuted)),
+		).AlignTo(AlignCenter),
 		Column(items...).St(St().GapOf(3).PadOnly(8, 0, 0, 0)),
 	).St(St().Padding(12).R(10).BgC(mdColBgSoft).Stroke(1, mdColBorder).GapOf(6))
+}
+
+// footnotes 脚注区：文末汇总所有 [^id] 定义。
+func (r *mdRenderer) footnotes() *Node {
+	if len(r.doc.Footnotes) == 0 {
+		return nil
+	}
+	items := make([]*Node, 0, len(r.doc.Footnotes)*2)
+	for _, f := range r.doc.Footnotes {
+		body := mdInlineNodes(f.Inl, r.width-30, r.base, r.opts, 0)
+		row := Row(
+			Text(f.ID).St(St().Text(r.base.size-2, 600, mdColLink).W(18)),
+			Column(body...).Grow(1).St(St().GapOf(mdLineGap(r.opts, r.base.size))),
+		).AlignTo(AlignStart)
+		if mdState.anchors == nil {
+			mdState.anchors = map[string]*Node{}
+		}
+		id := mdAnchorID(r.key, "fn-"+f.ID)
+		row.K(id)
+		mdState.anchors[id] = row
+		items = append(items, row)
+	}
+	return Column(
+		Divider(),
+		Text("脚注").St(St().Text(r.base.size-1.5, 600, mdColMuted)),
+		Column(items...).St(St().GapOf(5).PadOnly(6, 0, 0, 0)),
+	).St(St().GapOf(8).PadOnly(10, 0, 0, 0))
 }
 
 // ---- 复制提示 ----
@@ -1367,7 +2085,7 @@ func mdToastNode() *Node {
 		return nil
 	}
 	age := AnimTime() - mdState.toastAt
-	if age > 1.6 {
+	if age >= ToastDefaultSeconds {
 		return nil
 	}
 	RequestRedraw()

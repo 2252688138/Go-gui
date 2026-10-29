@@ -53,7 +53,9 @@ float sdRoundBox(vec2 p, vec2 b, vec4 r) {
 
 void main() {
     float mode     = vParams.y;   // 0=fill 1=stroke 2=shadow
-    float feather  = max(vParams.x, 0.5);
+    // 下限 0.25：超采样时 CPU 侧会把过渡带按 1/ss 收紧（设备像素恒定），
+    // 原先 0.5 的下限会把 2× 档收紧后的 0.35 又抬回 0.5，锐度被吃掉一半。
+    float feather  = max(vParams.x, 0.25);
     float strokeW  = vParams.z;
     float glow     = vParams.w;
 
@@ -181,6 +183,7 @@ out vec4 fragColor;
 uniform sampler2D uTex;
 uniform vec2 uTexel;  // 1 / 超采样目标尺寸
 uniform float uSpan;  // 每个输出像素覆盖的源像素数（= 超采样倍数）
+uniform float uSharpen; // 降采样后的轻度锐化强度（0 = 关闭）
 
 void main() {
     vec2 base = uTexel * (uSpan * 0.125);
@@ -191,7 +194,19 @@ void main() {
             c += texture(uTex, vUV + o);
         }
     }
-    fragColor = c * 0.0625;
+    c *= 0.0625;
+    // 轻度 unsharp：box 平均会把 1px 级细节（横竖笔、1px 线条）压低成「软」观感，
+    // 人眼会误判为「还不如 1:1 清晰」。以 1 输出像素半径的十字平均作为模糊基准，
+    // 只补回被平滑掉的一小部分成分：既保留抗锯齿，又不至于出现白色光晕。
+    if (uSharpen > 0.0) {
+        vec2 o = uTexel * uSpan;
+        vec4 blur = (texture(uTex, vUV + vec2(o.x, 0.0)) +
+                     texture(uTex, vUV - vec2(o.x, 0.0)) +
+                     texture(uTex, vUV + vec2(0.0, o.y)) +
+                     texture(uTex, vUV - vec2(0.0, o.y))) * 0.25;
+        c = clamp(c + (c - blur) * uSharpen, 0.0, 1.0);
+    }
+    fragColor = c;
 }
 `
 

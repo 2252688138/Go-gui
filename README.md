@@ -272,9 +272,22 @@ go run ./tools/atlasdump       # ASCII 打印字形图集
 | macOS | Cocoa `NSWindow` + `CAMetalLayer` | Metal 或 OpenGL 4.1 |
 | Linux | X11 / Wayland | OpenGL / Vulkan |
 | Android | `ANativeWindow` + EGL | GLES 3 |
-| Web | canvas | WebGL 2（wasm） |
+| Web | `canvas`（鼠标 / 键盘 / 滚轮事件） | WebGL 2 + WebAssembly（已完成） |
 
 上层 `ui` 包与平台无关，换后端不需要改动业务代码。
+
+### 浏览器端（web/）
+
+```bash
+./web/build.ps1                                   # -> web/dist/main.wasm + index.html + wasm_exec.js + font.ttf
+go run ./web/server -dir web/dist -addr 127.0.0.1:8088 -open
+```
+
+- `web/gl`：WebGL2 封装与单着色器管线（圆角 SDF / 渐变 / 阴影 / 字形 / 图片，一次 drawArrays）。
+- `web/draw`：2D 图元（圆角矩形、竖向渐变、投影、任意方向线段、字形四边形），逻辑坐标按 `Scale` 换算设备像素。
+- `web/text`：用 `x/image/font/sfnt` 读 TTF，自写扫描线光栅器把字形压成 8bit 覆盖率写进 2048² R8 图集（对应桌面端 DirectWrite）。
+- `web/main.go`：浏览器端演示界面（顶栏 / 侧栏 / 概览 / 组件 / 图表），交互（悬停、点击、开关、滑块、输入框、滚轮）全部在 Go 侧命中计算。
+- 运行参数加 `?debug` 可在左下角看到帧率、顶点数与采样像素颜色。
 
 ## 系统能力（M2）
 

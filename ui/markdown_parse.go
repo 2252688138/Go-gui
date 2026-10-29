@@ -34,6 +34,11 @@ const (
 	mdGallery
 	mdMedia
 	mdTOC
+	// 新增：公式块 / Mermaid / 定义列表 / 脚注区
+	mdMath
+	mdMermaid
+	mdDefList
+	mdFootnotes
 )
 
 // mdInline 一段行内文本及其样式。
@@ -49,6 +54,13 @@ type mdInline struct {
 	Href   string
 	// Br 硬换行（Markdown 行尾两个空格 / \ / <br>）。
 	Br bool
+	// Math 行内公式源码（$...$），非空时忽略 Text。
+	Math string
+	// Sup / Sub 上标与下标（^x^ / ~x~）。
+	Sup string
+	Sub string
+	// FnRef 脚注引用 id（[^id]）。
+	FnRef string
 }
 
 // mdCell 表格单元格。
@@ -118,8 +130,25 @@ type mdBlock struct {
 	Prog    *mdProgressBlock
 	Gallery []mdImageItem
 	URL     string
+	// Math 公式源码（mdMath）。
+	Math string
+	// Defs 定义列表项（mdDefList）。
+	Defs []mdDefItem
 	// Key 渲染时分配（标题锚点、交互状态键）。
 	Key string
+}
+
+// mdDefItem 定义列表一项：术语 + 若干条释义。
+type mdDefItem struct {
+	Term []mdInline
+	Defs [][]mdInline
+}
+
+// mdFootnote 脚注定义。
+type mdFootnote struct {
+	ID   string
+	Inl  []mdInline
+	Body []*mdBlock
 }
 
 // mdHeadingInfo 目录项。
@@ -131,8 +160,9 @@ type mdHeadingInfo struct {
 
 // mdDoc 解析结果。
 type mdDoc struct {
-	Blocks   []*mdBlock
-	Headings []mdHeadingInfo
+	Blocks    []*mdBlock
+	Headings  []mdHeadingInfo
+	Footnotes []mdFootnote
 }
 
 var (
@@ -146,7 +176,27 @@ var (
 	mdFenceRe    = regexp.MustCompile("^\\s{0,3}(```+|~~~+)(.*)$")
 	mdCalloutRe  = regexp.MustCompile(`^\[!(NOTE|TIP|WARNING|IMPORTANT|CAUTION|SUCCESS|ERROR|INFO)\]\s*`)
 	mdLooseURLRe = regexp.MustCompile(`^(https?://[^\s<>()]+)$`)
+	// 脚注定义 `[^id]: 内容`
+	mdFootDefRe = regexp.MustCompile(`^\s{0,3}\[\^([^\]]+)\]:\s?(.*)$`)
+	// 定义列表 `: 释义`
+	mdDefRe = regexp.MustCompile(`^\s{0,3}:\s+(.*)$`)
+	// 裸链接（自动识别成可点击链接）
+	mdURLRe = regexp.MustCompile(`https?://[^\s<>()（）【】，。、；]+`)
 )
+
+// isMathFence 判断代码块语言是否为公式块。
+func isMathFence(lang string) bool {
+	switch strings.ToLower(lang) {
+	case "math", "latex", "tex", "katex":
+		return true
+	}
+	return false
+}
+
+// isMermaidFence 判断代码块语言是否为 Mermaid 图。
+func isMermaidFence(lang string) bool {
+	return strings.EqualFold(lang, "mermaid")
+}
 
 // parseMarkdown 解析整篇文档（结果可复用，调用方负责缓存）。
 func parseMarkdown(src string) *mdDoc {
@@ -157,14 +207,16 @@ func parseMarkdown(src string) *mdDoc {
 	d := &mdDoc{}
 	d.Blocks = p.parseBlocks()
 	d.Headings = p.headings
+	d.Footnotes = p.footnotes
 	return d
 }
 
 type mdParser struct {
-	lines    []string
-	pos      int
-	headings []mdHeadingInfo
-	slugN    int
+	lines     []string
+	pos       int
+	headings  []mdHeadingInfo
+	footnotes []mdFootnote
+	slugN     int
 }
 
 func (p *mdParser) parseBlocks() []*mdBlock {
@@ -177,6 +229,22 @@ func (p *mdParser) parseBlocks() []*mdBlock {
 		}
 		if b := p.parseExt(); b != nil {
 			out = append(out, b)
+			continue
+		}
+		// 脚注定义（不产出块，收进 doc.Footnotes）
+		if m := mdFootDefRe.FindStringSubmatch(line); m != nil {
+			p.parseFootnoteDef(m[1], m[2])
+			continue
+		}
+		// 块级公式 $$...$$ / \[...\]
+		tline := strings.TrimSpace(line)
+		if strings.HasPrefix(tline, "$$") || strings.HasPrefix(tline, "\\[") {
+			out = append(out, p.parseMathBlock())
+			continue
+		}
+		// 定义列表
+		if p.isDefListStart() {
+			out = append(out, p.parseDefList())
 			continue
 		}
 		if m := mdFenceRe.FindStringSubmatch(line); m != nil {
@@ -249,7 +317,113 @@ func (p *mdParser) parseFence() *mdBlock {
 		body = append(body, l)
 		p.pos++
 	}
-	return &mdBlock{Kind: mdCode, Lang: strings.TrimPrefix(lang, "."), Code: strings.Join(body, "\n")}
+	code := strings.Join(body, "\n")
+	switch {
+	case isMathFence(lang):
+		return &mdBlock{Kind: mdMath, Lang: lang, Math: code, Code: code}
+	case isMermaidFence(lang):
+		return &mdBlock{Kind: mdMermaid, Lang: lang, Code: code}
+	}
+	return &mdBlock{Kind: mdCode, Lang: strings.TrimPrefix(lang, "."), Code: code}
+}
+
+// parseMathBlock 解析块级公式：$$...$$、\[...\]、单行 $$x$$。
+func (p *mdParser) parseMathBlock() *mdBlock {
+	line := strings.TrimSpace(p.lines[p.pos])
+	open, closeMark := "$$", "$$"
+	if strings.HasPrefix(line, "\\[") {
+		open, closeMark = "\\[", "\\]"
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line, open))
+	p.pos++
+	if i := strings.Index(rest, closeMark); i >= 0 {
+		return &mdBlock{Kind: mdMath, Math: strings.TrimSpace(rest[:i])}
+	}
+	var body []string
+	if rest != "" {
+		body = append(body, rest)
+	}
+	for p.pos < len(p.lines) {
+		l := p.lines[p.pos]
+		p.pos++
+		if i := strings.Index(l, closeMark); i >= 0 {
+			if pre := strings.TrimSpace(l[:i]); pre != "" {
+				body = append(body, pre)
+			}
+			break
+		}
+		body = append(body, l)
+	}
+	return &mdBlock{Kind: mdMath, Math: strings.TrimSpace(strings.Join(body, "\n"))}
+}
+
+// parseFootnoteDef 收集脚注定义（含缩进续行）。
+func (p *mdParser) parseFootnoteDef(id, first string) {
+	p.pos++
+	var body []string
+	if s := strings.TrimSpace(first); s != "" {
+		body = append(body, s)
+	}
+	for p.pos < len(p.lines) {
+		l := p.lines[p.pos]
+		if strings.TrimSpace(l) == "" {
+			// 空行后仍是缩进内容才继续
+			j := p.pos + 1
+			for j < len(p.lines) && strings.TrimSpace(p.lines[j]) == "" {
+				j++
+			}
+			if j < len(p.lines) && (strings.HasPrefix(p.lines[j], "    ") || strings.HasPrefix(p.lines[j], "\t")) {
+				p.pos++
+				continue
+			}
+			break
+		}
+		if !strings.HasPrefix(l, "    ") && !strings.HasPrefix(l, "\t") {
+			break
+		}
+		body = append(body, strings.TrimSpace(l))
+		p.pos++
+	}
+	p.footnotes = append(p.footnotes, mdFootnote{ID: id, Inl: parseInline(mdJoinLines(body))})
+}
+
+// isDefListStart 当前行是术语、下一行是「: 释义」时为定义列表。
+func (p *mdParser) isDefListStart() bool {
+	if p.pos+1 >= len(p.lines) {
+		return false
+	}
+	cur := strings.TrimSpace(p.lines[p.pos])
+	if cur == "" || strings.HasPrefix(cur, ":") || strings.HasPrefix(cur, "#") ||
+		strings.HasPrefix(cur, "|") || strings.HasPrefix(cur, ">") {
+		return false
+	}
+	if mdListRe.MatchString(p.lines[p.pos]) || mdFenceRe.MatchString(p.lines[p.pos]) {
+		return false
+	}
+	return mdDefRe.MatchString(p.lines[p.pos+1])
+}
+
+// parseDefList 定义列表：术语 + 一行或多行「: 释义」。
+func (p *mdParser) parseDefList() *mdBlock {
+	b := &mdBlock{Kind: mdDefList}
+	for p.pos < len(p.lines) {
+		term := strings.TrimSpace(p.lines[p.pos])
+		if term == "" || p.pos+1 >= len(p.lines) || !mdDefRe.MatchString(p.lines[p.pos+1]) {
+			break
+		}
+		item := mdDefItem{Term: parseInline(term)}
+		p.pos++
+		for p.pos < len(p.lines) {
+			m := mdDefRe.FindStringSubmatch(p.lines[p.pos])
+			if m == nil {
+				break
+			}
+			item.Defs = append(item.Defs, parseInline(strings.TrimSpace(m[1])))
+			p.pos++
+		}
+		b.Defs = append(b.Defs, item)
+	}
+	return b
 }
 
 // ---- 引用 / 提示块 ----
@@ -540,6 +714,12 @@ func (p *mdParser) startsBlock(line string) bool {
 	if mdImageRe.MatchString(line) {
 		return true
 	}
+	if strings.HasPrefix(t, "$$") || strings.HasPrefix(t, "\\[") {
+		return true
+	}
+	if mdFootDefRe.MatchString(line) || p.isDefListStart() {
+		return true
+	}
 	return p.isTableStart()
 }
 
@@ -822,6 +1002,37 @@ func parseInline(s string) []mdInline {
 					continue
 				}
 			}
+			// 下标 ~x~
+			if j := mdFindRune(rs, i+1, '~'); j > i+1 {
+				sub := string(rs[i+1 : j])
+				if !strings.ContainsAny(sub, " \t") && len([]rune(sub)) <= 24 {
+					flush()
+					out = append(out, mdInline{Text: sub, Sub: sub})
+					i = j
+					continue
+				}
+			}
+			buf = append(buf, r)
+		case '^':
+			// 上标 ^x^
+			if j := mdFindRune(rs, i+1, '^'); j > i+1 {
+				sup := string(rs[i+1 : j])
+				if !strings.ContainsAny(sup, " \t") && len([]rune(sup)) <= 24 {
+					flush()
+					out = append(out, mdInline{Text: sup, Sup: sup})
+					i = j
+					continue
+				}
+			}
+			buf = append(buf, r)
+		case '$':
+			// 行内公式 $...$（两端不成对/内容为空时按普通字符处理）
+			if j := mdInlineMathEnd(rs, i); j > 0 {
+				flush()
+				out = append(out, mdInline{Math: strings.TrimSpace(string(rs[i+1 : j]))})
+				i = j
+				continue
+			}
 			buf = append(buf, r)
 		case '=':
 			if i+1 < len(rs) && rs[i+1] == '=' {
@@ -844,6 +1055,15 @@ func parseInline(s string) []mdInline {
 			}
 			buf = append(buf, r)
 		case '[':
+			// 脚注引用 [^id]
+			if i+1 < len(rs) && rs[i+1] == '^' {
+				if j := mdFindRune(rs, i+2, ']'); j > i+2 {
+					flush()
+					out = append(out, mdInline{FnRef: string(rs[i+2 : j])})
+					i = j
+					continue
+				}
+			}
 			if text, href, next, ok := mdParseLink(rs, i); ok {
 				flush()
 				out = append(out, mdInline{Text: text, Link: true, Href: href})
@@ -874,6 +1094,86 @@ func parseInline(s string) []mdInline {
 		}
 	}
 	flush()
+	return mdLinkify(out)
+}
+
+// mdInlineMathEnd 找到行内公式的结束 $（要求两端不留空白、内容非空）。
+func mdInlineMathEnd(rs []rune, open int) int {
+	if open+1 >= len(rs) {
+		return -1
+	}
+	nxt := rs[open+1]
+	if nxt == ' ' || nxt == '\t' || nxt == '$' {
+		return -1
+	}
+	for i := open + 1; i < len(rs); i++ {
+		switch rs[i] {
+		case '\\':
+			i++
+			continue
+		case '\n':
+			return -1
+		case '$':
+			// 结束符前不能是空白
+			if rs[i-1] == ' ' || rs[i-1] == '\t' {
+				return -1
+			}
+			// 结束符后不能紧跟数字（避免 $5 与 $6 被误判）
+			if i+1 < len(rs) && rs[i+1] >= '0' && rs[i+1] <= '9' {
+				return -1
+			}
+			return i
+		}
+	}
+	return -1
+}
+
+// mdLinkify 把纯文本里的裸 URL 拆成可点击链接（markdown 语法之外的兜底）。
+func mdLinkify(runs []mdInline) []mdInline {
+	hasURL := false
+	for _, r := range runs {
+		if r.Text != "" && !r.Code && !r.Kbd && !r.Link && r.Math == "" && r.FnRef == "" && mdURLRe.MatchString(r.Text) {
+			hasURL = true
+			break
+		}
+	}
+	if !hasURL {
+		return runs
+	}
+	out := make([]mdInline, 0, len(runs)+4)
+	for _, r := range runs {
+		if r.Text == "" || r.Code || r.Kbd || r.Link || r.Math != "" || r.FnRef != "" || !mdURLRe.MatchString(r.Text) {
+			out = append(out, r)
+			continue
+		}
+		s := r.Text
+		for {
+			loc := mdURLRe.FindStringIndex(s)
+			if loc == nil {
+				break
+			}
+			// 去掉链接尾部常见的标点
+			end := loc[1]
+			for end > loc[0] && strings.ContainsRune(".,;:!?)]}>'\"”，。、；）】", rune(s[end-1])) {
+				end--
+			}
+			if end <= loc[0] {
+				break
+			}
+			if pre := s[:loc[0]]; pre != "" {
+				out = append(out, mdInline{Text: pre})
+			}
+			u := s[loc[0]:end]
+			out = append(out, mdInline{Text: u, Link: true, Href: u})
+			s = s[end:]
+			if s == "" {
+				break
+			}
+		}
+		if s != "" {
+			out = append(out, mdInline{Text: s})
+		}
+	}
 	return out
 }
 

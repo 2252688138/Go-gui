@@ -1,3 +1,5 @@
+//go:build windows
+
 package win32
 
 import (
@@ -74,6 +76,24 @@ func (t *Tray) SetTooltip(s string) {
 
 // SetItems 更新右键菜单项。
 func (t *Tray) SetItems(items []TrayItem) { t.items = items }
+
+// Notify 在托盘图标上弹出气泡提示（title 可空，msg 为正文）。
+func (t *Tray) Notify(title, msg string) {
+	if t == nil || !t.added {
+		return
+	}
+	var nid NOTIFYICONDATAW
+	nid.CbSize = uint32(unsafe.Sizeof(nid))
+	nid.Hwnd = t.Hwnd
+	nid.UID = t.ID
+	nid.UFlags = NIF_INFO
+	nid.DwInfoFlags = NIIF_INFO
+	copy(nid.SzInfo[:], syscall.StringToUTF16(msg))
+	if title != "" {
+		copy(nid.SzInfoTitle[:], syscall.StringToUTF16(title))
+	}
+	Shell_NotifyIconW(NIM_MODIFY, &nid)
+}
 
 // Remove 移除托盘图标。
 func (t *Tray) Remove() {

@@ -1,3 +1,5 @@
+//go:build windows
+
 package win32
 
 type POINT struct{ X, Y int32 }
@@ -124,6 +126,10 @@ const (
 	WM_NCHITTEST     = 0x0084
 	WM_NCACTIVATE    = 0x0086
 	WM_NCCALCSIZE    = 0x0083
+	WM_NCPAINT       = 0x0085
+	// 主题引擎绘制标题栏/框架的内部消息（自绘边框窗口需要吞掉）
+	WM_NCUAHDRAWCAPTION = 0x00AE
+	WM_NCUAHDRAWFRAME   = 0x00AF
 	// 非客户区命中测试返回值（自绘边框时用于保留窗口缩放能力）
 	HTLEFT           = 10
 	HTRIGHT          = 11
@@ -150,6 +156,9 @@ const (
 	WM_MOUSEWHEEL    = 0x020A
 	WM_MOUSELEAVE    = 0x02A3
 	WM_DPICHANGED    = 0x02E0
+	// 文件拖入（shell32 DragAcceptFiles 投递）与全局热键
+	WM_DROPFILES = 0x0233
+	WM_HOTKEY    = 0x0312
 
 	PM_REMOVE   = 0x0001
 	PM_NOREMOVE = 0x0000
@@ -347,6 +356,7 @@ const (
 	OFN_NOCHANGEDIR     = 0x00000008
 	OFN_PATHMUSTEXIST   = 0x00000800
 	OFN_FILEMUSTEXIST   = 0x00001000
+	OFN_ALLOWMULTISELECT = 0x00000200
 	OFN_EXPLORER        = 0x00080000
 
 	MF_STRING    = 0x00000000
@@ -375,4 +385,50 @@ const (
 	SW_HIDE     = 0
 	SW_MINIMIZE = 6
 	SW_RESTORE  = 9
+
+	// SetWindowPos 的窗口插入位置（置顶 / 取消置顶）
+	HWND_TOPMOST   = ^uintptr(0)     // -1
+	HWND_NOTOPMOST = ^uintptr(0) - 1 // -2
+
+	// 全局热键修饰键（RegisterHotKey）
+	MOD_ALT      = 0x0001
+	MOD_CONTROL  = 0x0002
+	MOD_SHIFT    = 0x0004
+	MOD_WIN      = 0x0008
+	MOD_NOREPEAT = 0x4000
+
+	// SetThreadExecutionState（阻止休眠 / 屏幕常亮）
+	ES_SYSTEM_REQUIRED  = 0x00000001
+	ES_DISPLAY_REQUIRED = 0x00000002
+	ES_CONTINUOUS       = 0x80000000
+
+	// SHFileOperationW（回收站删除）
+	FO_DELETE          = 0x0003
+	FOF_SILENT         = 0x0004
+	FOF_NOCONFIRMATION = 0x0010
+	FOF_ALLOWUNDO      = 0x0040
+	FOF_NOERRORUI      = 0x0400
+
+	// 注册表读取（系统深浅色）
+	HKEY_CURRENT_USER = 0x80000001
+	KEY_READ          = 0x20019
+	REG_SZ            = 1
+
+	// 剪贴板文件列表格式
+	CF_HDROP = 15
 )
+
+// SHFILEOPSTRUCTW shell32 文件操作结构（回收站删除）。
+// 布局与 C 结构体在 amd64 上一致（hwnd/wFunc/pFrom/pTo/fFlags/BOOL/pNameMappings/lpszProgressTitle = 56 字节），
+// 中间的 uint32 是 wFunc 之后的对齐填充，不能省。
+type SHFILEOPSTRUCTW struct {
+	Hwnd              uintptr
+	WFunc             uint32
+	_                 uint32
+	PFrom             *uint16
+	PTo               *uint16
+	FFlags            uint16
+	FAnyOperationsErr int32
+	PNameMappings     uintptr
+	LpszProgressTitle *uint16
+}

@@ -1,5 +1,10 @@
 package ui
 
+import (
+	"os"
+	"strconv"
+)
+
 // 界面缩放（整体 UI zoom）：
 //
 // 逻辑像素 = 物理像素 / (DPI 比例 × uiScale)，同时把 DPI 比例 × uiScale 传给
@@ -10,6 +15,9 @@ package ui
 // 超高清（整帧超采样 SSAA）在缩放之上再多乘一层 ssaa：
 // 渲染目标 = 物理像素 × ssaa，字形也按 ssaa 倍光栅化，最后降采样回窗口像素。
 // 逻辑坐标、布局、命中测试完全不变，只有渲染分辨率变化。
+//
+// 降采样会轻微压低 1px 级细节的对比度（主观上“软”），因此 resolve 阶段
+// 额外做一道轻度锐化（gpu.ssaaSharpen，可用 GOGUI_SS_SHARPEN 调节）。
 
 var uiScale float32 = 1
 
@@ -34,6 +42,16 @@ const ssPixelBudget = 8192 * 4320
 
 // ssMode 超采样档位设置（SSAuto = 跟随 DPI 自动）。
 var ssMode float32 = SSAuto
+
+// init 允许用环境变量 GOGUI_SS 指定启动档位（0=自动 1=标准 1.25 1.5 2），
+// 便于命令行 / 自动化对比不同清晰度下的画面，不影响正常启动（未设置时走自动）。
+func init() {
+	if v := os.Getenv("GOGUI_SS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 32); err == nil && f >= 0 && f <= 2 {
+			ssMode = float32(f)
+		}
+	}
+}
 
 // UIScale 当前界面缩放（1 = 100%）。
 func UIScale() float32 { return uiScale }
@@ -146,6 +164,19 @@ func (a *App) renderDims() (pw, ph int32, ss float32) {
 	return int32(float32(dpw)*ss + 0.5), int32(float32(dph)*ss + 0.5), ss
 }
 
+// textureSS 光栅纹理（图表曲线等）应乘的超采样倍数。
+// 与整帧 SSAA 同步，但不含像素预算降档后的影响——预算降档只影响离屏目标，
+// 纹理分辨率仍按档位生成，避免「降档后曲线反而更糊」。
+func (a *App) textureSS() float32 {
+	if a == nil || a.r == nil {
+		return 1
+	}
+	if ss := a.r.SuperSample(); ss > 1.01 {
+		return ss
+	}
+	return 1
+}
+
 // renderSize 渲染目标尺寸与渲染缩放（DPI × 界面缩放 × 超采样）。
 func (a *App) renderSize() (pw, ph int32, scale, ss float32) {
 	pw, ph, ss = a.renderDims()
@@ -169,9 +200,9 @@ func (a *App) applyRenderScale() {
 	if a.fonts != nil {
 		a.fonts.setScale(scale)
 	}
-	if a.comp != nil {
+	if a.win.HasCompose() {
 		dpw, dph := a.win.PixelSize()
-		_ = a.comp.Resize(dpw, dph)
+		a.win.ResizeCompose(dpw, dph)
 	}
 	a.dirty = true
 }

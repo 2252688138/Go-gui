@@ -55,10 +55,11 @@ func (lc *layoutCtx) measure(n *Node, maxW float32) (float32, float32) {
 	if lh <= 0 {
 		lh = f.LineHeight
 	}
-	// WrapOn：按可用宽度折行（与绘制共用 wrapTextLines），高度 = 行数 × 行高。
+	// WrapOn：按可用宽度折行（与绘制共用折行缓存），高度 = 行数 × 行高。
+	// 结果来自 wrapLinesCached，同一段落在测量/绘制之间只算一次。
 	if n.Style.Wrap && maxW > 0 {
-		lines := wrapTextLines(f, n.Text, maxW)
 		n.wrapW = maxW
+		lines := wrapLinesCached(f, n.Text, maxW)
 		var w float32
 		for _, ln := range lines {
 			if v := f.Measure(ln); v > w {
@@ -68,14 +69,13 @@ func (lc *layoutCtx) measure(n *Node, maxW float32) (float32, float32) {
 		return w, float32(len(lines)) * lh
 	}
 	n.wrapW = 0
-	lines := splitLines(n.Text)
 	var w float32
-	for _, ln := range lines {
+	forEachLine(n.Text, func(ln string) {
 		if v := f.Measure(ln); v > w {
 			w = v
 		}
-	}
-	return w, float32(len(lines)) * lh
+	})
+	return w, float32(lineCount(n.Text)) * lh
 }
 
 // Layout 对整棵树做布局：先 measure（算尺寸），再 arrange（定位）。
@@ -1092,6 +1092,8 @@ func (fc *fontCache) evictOldest() {
 		delete(fc.fonts, oldKey)
 	}
 	delete(fc.age, oldKey)
+	// 折行缓存以 *Font 为键，字体已关闭必须整体失效，否则缓存会拖住字体与图集
+	clearWrapMemo()
 }
 
 func (fc *fontCache) setScale(scale float32) {
@@ -1102,6 +1104,8 @@ func (fc *fontCache) setScale(scale float32) {
 	for _, f := range fc.fonts {
 		f.SetScale(scale)
 	}
+	// 字形尺寸变了，按字体缓存的折行结果全部失效
+	clearWrapMemo()
 }
 
 func (fc *fontCache) close() {
@@ -1110,6 +1114,7 @@ func (fc *fontCache) close() {
 	}
 	fc.fonts = map[fontKey]*text.Font{}
 	fc.age = map[fontKey]uint64{}
+	clearWrapMemo()
 }
 
 // atlasBytes 当前图集占用总字节（字体数 × 每张图集大小）。

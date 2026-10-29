@@ -69,8 +69,20 @@ type MenuBarState struct {
 // NewMenuBar 创建菜单栏状态。
 func NewMenuBar() *MenuBarState {
 	st := &MenuBarState{Open: -1}
-	menuStates = append(menuStates, st)
+	registerMenuState(st)
 	return st
+}
+
+// registerMenuState 登记菜单栏状态（ESC 统一关闭用）。
+// 每次重算页面都会新建菜单栏，重复登记会让列表无限增长，
+// 于是「关掉所有菜单」的遍历越来越慢、点菜单越来越卡；同一状态只登记一次。
+func registerMenuState(st *MenuBarState) {
+	for _, s := range menuStates {
+		if s == st {
+			return
+		}
+	}
+	menuStates = append(menuStates, st)
 }
 
 // menuStates 已创建的菜单栏状态（ESC 统一关闭用）。
@@ -188,6 +200,21 @@ func (st *MenuBarState) Close() {
 // IsOpen 当前是否有菜单展开。
 func (st *MenuBarState) IsOpen() bool { return st != nil && st.Open >= 0 }
 
+// openMenuAt 打开第 idx 个顶级菜单（已有菜单会立即切换，连同子菜单路径一起重置）。
+func openMenuAt(st *MenuBarState, idx int) {
+	if st == nil {
+		return
+	}
+	st.Open = idx
+	st.Sub = nil
+	st.inside = true
+	st.touch()
+	if st.hideTimer != nil {
+		st.hideTimer.Stop()
+		st.hideTimer = nil
+	}
+}
+
 // MenuBar 渲染标题栏里的横向菜单按钮行。
 // 下拉浮层由 MenuLayer 渲染（anchorX 传菜单栏左边缘的窗口坐标）。
 func MenuBar(st *MenuBarState, menus []MenuDef) *Node {
@@ -225,8 +252,7 @@ func MenuBar(st *MenuBarState, menus []MenuDef) *Node {
 			st.enter()
 			// 已有菜单展开时，鼠标划过其它顶级菜单直接切换
 			if st.Open >= 0 && st.Open != idx {
-				st.Open = idx
-				st.Sub = st.Sub[:0]
+				openMenuAt(st, idx)
 				RequestRedraw()
 			}
 		})
@@ -234,10 +260,8 @@ func MenuBar(st *MenuBarState, menus []MenuDef) *Node {
 			if st.Open == idx {
 				st.Close()
 			} else {
-				st.Open = idx
-				st.Sub = st.Sub[:0]
-				st.inside = true
-				st.touch()
+				// 已有菜单展开时直接切到被点的菜单（旧菜单立即隐藏），不再要求先关闭
+				openMenuAt(st, idx)
 			}
 			RequestRedraw()
 		})
@@ -279,16 +303,24 @@ func MenuLayer(st *MenuBarState, menus []MenuDef, anchorX, anchorY float32) *Nod
 	if ox < 4 {
 		ox = 4
 	}
+	// 浮层只铺「菜单栏下方」这块区域。
+	// 以前整层用 AbsFill 盖满窗口：命中测试在菜单栏上会先停在这一层（它没有任何回调
+	// 也没有交互祖先），永远落不到菜单按钮，表现为「已有菜单展开时必须先关掉它
+	// 才能点别的顶级菜单」。收窄到菜单栏下方后，菜单栏重新可命中（悬停/点击都能切换）。
+	regionH := viewportH - anchorY
+	if regionH < 0 {
+		regionH = 0
+	}
 	panel := menuPanelNode(st, items, w, 0, nil)
-	panel.St(St().AbsTL(ox, anchorY))
+	panel.St(St().AbsTL(ox, 0))
 
-	// 点击菜单外部关闭（只铺菜单下方区域，菜单栏仍可悬停切换）
-	catcher := Box().St(St().AbsTL(0, anchorY).W(ViewportW()).H(viewportH-anchorY))
+	// 点击菜单外部关闭（只铺菜单下方区域，菜单栏仍可悬停/点击切换）
+	catcher := Box().St(St().AbsTL(0, 0).W(ViewportW()).H(regionH))
 	catcher.Tap(func() {
 		st.Close()
 		RequestRedraw()
 	})
-	return Stack(catcher, panel).St(St().AbsFill())
+	return Stack(catcher, panel).St(St().AbsTL(0, anchorY).W(ViewportW()).H(regionH))
 }
 
 // MenuPanel 浮层菜单（放在 Stack 中，用绝对坐标定位）。支持子菜单、分隔线、勾选与禁用。

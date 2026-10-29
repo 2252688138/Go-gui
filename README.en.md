@@ -234,7 +234,7 @@ The platform-specific part is `internal/gpu.Backend` plus the window layer; port
 | macOS | Cocoa `NSWindow` + `CAMetalLayer` | Metal / OpenGL 4.1 |
 | Linux | X11 / Wayland | OpenGL / Vulkan |
 | Android | `ANativeWindow` + EGL | GLES 3 |
-| Web | canvas | WebGL 2 (wasm) |
+| Web | `canvas` (mouse / keyboard / wheel events) | WebGL 2 + WebAssembly (done) |
 
 ## License
 

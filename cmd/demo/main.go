@@ -24,7 +24,6 @@ var (
 	tabPick            = "all"
 	accOpen            = true
 	modalOpen          = false
-	toastMsg           = ""
 )
 
 type page struct {
@@ -82,9 +81,9 @@ func view() *ui.Node {
 	// 叠层：模态框与 Toast 覆盖在内容之上
 	return ui.Stack(body, ui.Modal(modalOpen, "确认操作", "模态框基于 Stack + 绝对定位实现，遮罩层拦截点击，卡片在容器内居中。", func() {
 		modalOpen = false
-		toastMsg = "已取消"
+		ui.ToastShow("已取消")
 		ui.RequestRedraw()
-	}), ui.Toast(toastMsg)).St(ui.St().Hp(100))
+	}), ui.ToastLayer()).St(ui.St().Hp(100))
 }
 
 func mainContent() *ui.Node {
@@ -122,7 +121,7 @@ func mainContent() *ui.Node {
 		items := make([]*ui.Node, 0, len(rows))
 		for _, r := range rows {
 			items = append(items, ui.ListItem("set-"+r.t, r.t, r.s, r.c, func() {
-				toastMsg = r.t + " 已打开"
+				ui.ToastShow(r.t + " 已打开")
 				ui.RequestRedraw()
 			}))
 		}
@@ -237,11 +236,11 @@ func componentsPage() *ui.Node {
 				ui.RequestRedraw()
 			}).St(ui.St().Text(13, 600, "#ffffff").PadXY(16, 8).R(9).BgGrad(ui.ColPrimary, ui.ColPrimary2, 90)),
 			ui.Button("显示 Toast", func() {
-				toastMsg = "操作成功 · " + strconv.Itoa(int(sliderV*100)) + "%"
+				ui.ToastShow("操作成功 · " + strconv.Itoa(int(sliderV*100)) + "%")
 				ui.RequestRedraw()
 			}).St(ui.St().Text(13, 500, "#c7d2fe").PadXY(16, 8).R(9).BgC(ui.ColBgSoft).Stroke(1, ui.ColStroke)),
 			ui.Button("清空提示", func() {
-				toastMsg = ""
+				ui.ToastHide()
 				ui.RequestRedraw()
 			}).St(ui.St().Text(13, 500, ui.ColTextMuted).PadXY(16, 8).R(9)),
 		).St(ui.St().GapOf(12)).AlignTo(ui.AlignCenter),

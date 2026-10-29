@@ -1,6 +1,8 @@
 # 构建产物（不要提交）
 /bin/
 /dist/
+web/dist/
+web/build.log
 *.exe
 *.upx
 rsrc_windows_*.syso.bak

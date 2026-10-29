@@ -1,6 +1,7 @@
 //go:build windows
 
-// gallery 演示 5 个完整界面案例：登录、仪表盘、设置、聊天、数据表格。
+// gallery 桌面版：含视频/音乐/WebView/系统能力等 Windows 专属案例。
+// Web 版是同一目录下的 web.go（js && wasm），入口同为 go build ./cmd/gallery。
 // 运行：go run ./cmd/gallery
 // 布局调试：go run ./cmd/gallery --dump dump.txt --case table
 package main
@@ -32,11 +33,12 @@ var cases = []caseItem{
 	{"layouts", "布局方式", "▨", "Flex / 网格 / 换行 / 瀑布流 / 叠层 / 分布 / 响应式"},
 	{"controls", "控件总览", "▩", "按钮变体 / 输入 / 滑块 / 表格 / 菜单 / 提示"},
 	{"form", "表单与弹窗", "▦", "下拉 / 多行 / 数字 / 日期 / 四类弹窗 / 抽屉"},
-	{"system", "系统能力", "◈", "图片 / 毛玻璃 / Emoji / 动画 / 滚动条 / 输入法 / 多窗口"},
+	{"system", "系统能力", "◈", "图片 / 拖入文件 / 毛玻璃 / Emoji / 动画 / 输入法 / 系统操作"},
 	{"music", "音乐播放器", "♫", "封面 / 频谱特效 / 进度 / 播放列表"},
 	{"video", "视频播放器", "◉", "mp4/mkv/mov/avi/webm/flv/ts/m3u8 + 控制条"},
 	{"markdown", "Markdown 渲染", "✎", "标题 / 列表 / 引用 / 代码 / 表格 / 扩展块"},
 	{"webview", "WebView 浏览器", "◎", "系统 WebView2 真网页 / 自绘地址栏 / 前进后退"},
+	{"charts", "图表", "◐", "折线 / 面积 / 柱状 / 饼 / 环形 / 雷达 / 散点"},
 }
 
 // ---- 案例状态 ----
@@ -70,9 +72,11 @@ var (
 	ctrlAccOpen         = true
 	ctrlRow             = -1
 	ctrlTip             = "悬停图标按钮可看到提示"
-
-	toast = ""
 )
+
+// toastShow 弹出一条轻提示：默认 2 秒后自动隐藏（ui.ToastDefaultSeconds 可调），
+// 传空串等同立即隐藏。
+func toastShow(msg string) { ui.ToastShow(msg) }
 
 type chatMsg struct {
 	me   bool
@@ -204,11 +208,11 @@ func view() *ui.Node {
 		}),
 		ui.If(ctrlMenu, func() *ui.Node {
 			return ui.MenuPanel(690, 150, []ui.MenuItem{
-				{Label: "新建文件", Hint: "Ctrl+N", OnPick: func() { ctrlMenu = false; toast = "新建文件" }},
-				{Label: "打开项目", Hint: "Ctrl+O", OnPick: func() { ctrlMenu = false; toast = "打开项目" }},
+				{Label: "新建文件", Hint: "Ctrl+N", OnPick: func() { ctrlMenu = false; toastShow("新建文件") }},
+				{Label: "打开项目", Hint: "Ctrl+O", OnPick: func() { ctrlMenu = false; toastShow("打开项目") }},
 				{Label: "导出为", Children: []ui.MenuItem{
-					{Label: "PNG 图片", OnPick: func() { ctrlMenu = false; toast = "已导出 PNG" }},
-					{Label: "PDF 文档", Hint: "Beta", OnPick: func() { ctrlMenu = false; toast = "已导出 PDF" }},
+					{Label: "PNG 图片", OnPick: func() { ctrlMenu = false; toastShow("已导出 PNG") }},
+					{Label: "PDF 文档", Hint: "Beta", OnPick: func() { ctrlMenu = false; toastShow("已导出 PDF") }},
 				}},
 				{Separator: true},
 				{Label: "更多设置…", Disabled: true},
@@ -224,7 +228,7 @@ func view() *ui.Node {
 		formOverlays(),
 		// Markdown 图片放大层（点击 markdown 中的图片后全屏预览）
 		ui.MarkdownLightbox(),
-		ui.Toast(toast),
+		ui.ToastLayer(),
 	).St(ui.St().Hp(100))
 }
 
@@ -277,7 +281,7 @@ func titleMenus() []ui.MenuDef {
 	return []ui.MenuDef{
 		{Label: "文件", Items: []ui.MenuItem{
 			{Label: "打开", Children: []ui.MenuItem{
-				{Label: "图片…", OnPick: func() { toast = "打开图片（示例）" }},
+				{Label: "图片…", OnPick: func() { toastShow("打开图片（示例）") }},
 				{Label: "视频…", OnPick: func() { switchCase("video") }},
 				{Label: "音频…", OnPick: func() { switchCase("music") }},
 			}},
@@ -287,12 +291,12 @@ func titleMenus() []ui.MenuDef {
 			{Label: "退出", OnPick: closeWindow},
 		}},
 		{Label: "编辑", Items: []ui.MenuItem{
-			{Label: "复制当前页面名", Hint: "Ctrl+C", OnPick: func() { toast = "已复制：" + current }},
+			{Label: "复制当前页面名", Hint: "Ctrl+C", OnPick: func() { toastShow("已复制：" + current) }},
 			{Label: "粘贴", Hint: "Ctrl+V", Disabled: true},
 			{Separator: true},
 			{Label: "查找", Children: []ui.MenuItem{
-				{Label: "当前页面内查找…", Hint: "Ctrl+F", OnPick: func() { toast = "查找（示例）" }},
-				{Label: "全局搜索…", Hint: "Ctrl+Shift+F", OnPick: func() { toast = "全局搜索（示例）" }},
+				{Label: "当前页面内查找…", Hint: "Ctrl+F", OnPick: func() { toastShow("查找（示例）") }},
+				{Label: "全局搜索…", Hint: "Ctrl+Shift+F", OnPick: func() { toastShow("全局搜索（示例）") }},
 			}},
 		}},
 		{Label: "视图", Items: []ui.MenuItem{
@@ -307,15 +311,15 @@ func titleMenus() []ui.MenuDef {
 		}},
 		{Label: "自定义", Items: []ui.MenuItem{
 			{Label: "二级菜单演示", Children: []ui.MenuItem{
-				{Label: "直接执行项", Hint: "Enter", OnPick: func() { toast = "二级菜单项" }},
+				{Label: "直接执行项", Hint: "Enter", OnPick: func() { toastShow("二级菜单项") }},
 				{Label: "三级菜单演示", Children: []ui.MenuItem{
-					{Label: "三级项 A", OnPick: func() { toast = "三级菜单项 A" }},
-					{Label: "三级项 B", OnPick: func() { toast = "三级菜单项 B" }},
+					{Label: "三级项 A", OnPick: func() { toastShow("三级菜单项 A") }},
+					{Label: "三级项 B", OnPick: func() { toastShow("三级菜单项 B") }},
 					{Separator: true},
 					{Label: "禁用项", Disabled: true},
 				}},
 				{Separator: true},
-				{Label: "带快捷键的项", Hint: "Ctrl+K", OnPick: func() { toast = "自定义菜单项" }},
+				{Label: "带快捷键的项", Hint: "Ctrl+K", OnPick: func() { toastShow("自定义菜单项") }},
 			}},
 			{Separator: true},
 			{Label: "当前页面：" + current, Disabled: true},
@@ -323,9 +327,9 @@ func titleMenus() []ui.MenuDef {
 		{Label: "帮助", Items: []ui.MenuItem{
 			{Label: "菜单用法", Children: []ui.MenuItem{
 				{Label: "MenuBar / MenuLayer", OnPick: func() { switchCase("controls") }},
-				{Label: "MenuItem.Children 嵌套", OnPick: func() { toast = "Children 非空即为子菜单，可多层嵌套" }},
+				{Label: "MenuItem.Children 嵌套", OnPick: func() { toastShow("Children 非空即为子菜单，可多层嵌套") }},
 			}},
-			{Label: "关于 GoGUI", OnPick: func() { toast = "GoGUI · 自绘标题栏与多级菜单示例" }},
+			{Label: "关于 GoGUI", OnPick: func() { toastShow("GoGUI · 自绘标题栏与多级菜单示例") }},
 		}},
 	}
 }
@@ -361,7 +365,7 @@ func setTheme(name string) {
 		ui.UseTheme(ui.ThemeDark)
 	}
 	theme = name
-	toast = "主题已切换：" + name
+	toastShow("主题已切换：" + name)
 	ui.RequestRedraw()
 }
 
@@ -386,7 +390,7 @@ func ssLabel(v float32) string {
 // setSuperSample 切换清晰度档位（自动 / 标准 / 1.25× / 1.5× / 2×），立即热生效。
 func setSuperSample(mode float32) {
 	ui.SetSuperSample(mode)
-	toast = "清晰度：" + ssLabel(ui.SuperSample())
+	toastShow("清晰度：" + ssLabel(ui.SuperSample()))
 	ui.RequestRedraw()
 }
 
@@ -408,10 +412,10 @@ func closeWindow() {
 
 func openChildWindow() {
 	if _, err := ui.NewWindow(ui.Options{Title: "子窗口 · GoGUI", Width: 520, Height: 360}, simpleChildView); err != nil {
-		toast = "打开子窗口失败：" + err.Error()
+		toastShow("打开子窗口失败：" + err.Error())
 		return
 	}
-	toast = "已打开子窗口"
+	toastShow("已打开子窗口")
 }
 
 func simpleChildView() *ui.Node {
@@ -457,6 +461,8 @@ func content() *ui.Node {
 	case "webview":
 		// 网页是独立子窗口，不能放进 Scroll（无法跟随滚动裁剪）
 		return ui.Column(webviewCase()).St(ui.St().GrowTo(1).Hp(100))
+	case "charts":
+		return ui.Scroll(chartsCase()).St(ui.St().GrowTo(1)).K("scroll-charts")
 	}
 	return ui.Center(loginCase()).St(ui.St().GrowTo(1).Hp(100))
 }
@@ -492,7 +498,7 @@ func loginCase() *ui.Node {
 				loginTip = "请先填写账号和密码"
 			} else {
 				loginTip = "登录成功：" + userName
-				toast = "欢迎，" + userName
+				toastShow("欢迎，" + userName)
 			}
 			ui.RequestRedraw()
 		}).St(ui.St().Wp(100).H(40).Text(14, 600, "#ffffff").R(10).
@@ -531,15 +537,15 @@ func dashboardCase() *ui.Node {
 			ui.Card(
 				ui.Title("最近活动", "点击条目查看"),
 				ui.ListItem("act-1", "部署成功", "prod · 2 分钟前", "#34d399", func() {
-					toast = "prod 部署成功"
+					toastShow("prod 部署成功")
 					ui.RequestRedraw()
 				}),
 				ui.ListItem("act-2", "新增节点", "cn-east-3 · 14 分钟前", "#38bdf8", func() {
-					toast = "已新增节点 cn-east-3"
+					toastShow("已新增节点 cn-east-3")
 					ui.RequestRedraw()
 				}),
 				ui.ListItem("act-3", "告警恢复", "api-latency · 1 小时前", "#fbbf24", func() {
-					toast = "告警已恢复"
+					toastShow("告警已恢复")
 					ui.RequestRedraw()
 				}),
 			).St(ui.St().GrowTo(1).FlexBasis(1)),
@@ -613,7 +619,7 @@ func settingsCase() *ui.Node {
 				ui.Radio("ss-200", "2× 超高清", ui.SuperSampleMode() == ui.SS200, func() { setSuperSample(ui.SS200) }),
 				ui.Text(ssLabel(ui.SuperSample())).St(ui.St().Text(11.5, 500, "#a5b4fc").W(96)),
 			).St(ui.St().GapOf(14)).AlignTo(ui.AlignCenter),
-			ui.Text("超高清 = 整帧按更高分辨率渲染后降采样，圆角、描边与文字边缘更细腻（自动档在 DPI<150% 时走 2×）。").
+			ui.Text("超高清 = 整帧按更高分辨率渲染再降采样，并对降采样后的边缘做轻度锐化补偿，圆角、描边与文字更锐（自动档在 DPI<150% 时走 2×）。").
 				St(ui.St().Text(11.5, 400, ui.ColTextMuted)),
 			ui.Divider(),
 			ui.Input("set-name", settingsText, "工作区名称", func(v string) { settingsText = v }),
@@ -653,7 +659,7 @@ func chatCase() *ui.Node {
 				}
 				messages = append(messages, chatMsg{true, msgInput})
 				msgInput = ""
-				toast = "已发送"
+				toastShow("已发送")
 				ui.RequestRedraw()
 			}).St(ui.St().Text(13, 600, "#ffffff").PadXY(18, 9).R(10).
 				BgGrad("#6366f1", "#8b5cf6", 90)),
@@ -724,7 +730,7 @@ func tableCase() *ui.Node {
 			ui.Row(ui.Progress(r.progress, color).Grow(1)).St(ui.St().W(180)),
 			ui.Text(r.owner).St(ui.St().Text(12, 400, "#98a3c0")).St(ui.St().W(90)),
 		).St(ui.St().BgC(bg)).K("row-"+strconv.Itoa(i)).Tap(func() {
-			toast = "选中：" + name
+			toastShow("选中：" + name)
 			ui.RequestRedraw()
 		}))
 	}
@@ -915,12 +921,200 @@ func layoutsCase() *ui.Node {
 	).St(ui.St().Padding(26).GapOf(16))
 }
 
+// ---- 案例：图表（折线 / 面积 / 柱状 / 饼 / 环形 / 雷达 / 散点）----
+var (
+	chartOnce    bool
+	chartPhase   float64
+	chartPicked  = "悬浮查看数值，点击柱 / 扇区 / 数据点"
+	chartMonths  = []string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月"}
+	chartWeeks   = []string{"周一", "周二", "周三", "周四", "周五", "周六", "周日"}
+	chartLine    *ui.Chart
+	chartArea    *ui.Chart
+	chartBar     *ui.Chart
+	chartPie     *ui.Chart
+	chartDonut   *ui.Chart
+	chartRadar   *ui.Chart
+	chartScatter *ui.Chart
+)
+
+// wave 造一段演示数据（相位变化时曲线形状跟着变）。
+func wave(base, amp float64, n int, ph float64) []float64 {
+	out := make([]float64, n)
+	for i := range out {
+		v := base + amp*math.Sin(float64(i)*1.1+ph) + amp*0.35*math.Sin(float64(i)*2.7+ph*2)
+		if v < 1 {
+			v = 1
+		}
+		out[i] = math.Round(v)
+	}
+	return out
+}
+
+// ensureCharts 只建一次图表对象（数据与缓存跟着 Chart 走，不要每帧新建）。
+func ensureCharts() {
+	if chartOnce {
+		return
+	}
+	chartOnce = true
+	chartLine = ui.NewChart(ui.ChartLine, chartMonths)
+	chartLine.Smooth = true
+	chartLine.Unit = " 次"
+	chartLine.Title = "访问趋势"
+	chartLine.OnPick = func(s, i int) { pickChart("折线图", chartLine, s, i) }
+
+	chartArea = ui.NewChart(ui.ChartArea, chartMonths)
+	chartArea.Stacked = true
+	chartArea.Unit = " 台"
+	chartArea.Title = "终端分布"
+
+	chartBar = ui.NewChart(ui.ChartBar, chartWeeks)
+	chartBar.Unit = " 单"
+	chartBar.Title = "每周下单"
+	chartBar.OnPick = func(s, i int) { pickChart("柱状图", chartBar, s, i) }
+
+	chartPie = ui.NewChart(ui.ChartPie, []string{"华东", "华南", "华北", "西部", "海外"})
+	chartPie.Title = "区域占比"
+	chartPie.OnPick = func(s, i int) { pickChart("饼图", chartPie, s, i) }
+
+	chartDonut = ui.NewChart(ui.ChartDonut, []string{"直连", "代理", "缓存", "其他"})
+	chartDonut.Title = "流量来源"
+	chartDonut.OnPick = func(s, i int) { pickChart("环形图", chartDonut, s, i) }
+
+	chartRadar = ui.NewChart(ui.ChartRadar, []string{"性能", "稳定", "安全", "成本", "体验"})
+	chartRadar.Title = "综合评分"
+
+	chartScatter = ui.NewChart(ui.ChartScatter, nil)
+	chartScatter.Title = "延迟分布"
+	chartScatter.Unit = " ms"
+
+	applyChartData()
+}
+
+// applyChartData 重新生成所有图表的数据（指纹变化 → 纹理重建一次）。
+func applyChartData() {
+	n := len(chartMonths)
+	chartLine.Series = []ui.Series{
+		{Name: "访问量", Values: wave(1400, 620, n, chartPhase)},
+		{Name: "注册量", Values: wave(760, 320, n, chartPhase+1.4)},
+	}
+	chartArea.Series = []ui.Series{
+		{Name: "桌面端", Values: wave(520, 180, n, chartPhase+0.4)},
+		{Name: "移动端", Values: wave(880, 260, n, chartPhase+1.1)},
+	}
+	chartBar.Series = []ui.Series{
+		{Name: "新增", Color: "#6366f1", Values: wave(340, 150, len(chartWeeks), chartPhase+0.2)},
+		{Name: "续费", Color: "#22d3ee", Values: wave(220, 110, len(chartWeeks), chartPhase+1.8)},
+		{Name: "退款", Color: "#f472b6", Values: wave(60, 40, len(chartWeeks), chartPhase+2.6)},
+	}
+	pieVals := wave(38, 22, 5, chartPhase)
+	for i := range pieVals {
+		if pieVals[i] < 4 {
+			pieVals[i] = 4
+		}
+	}
+	chartPie.Series = ui.PieSeries(pieVals, chartPie.Labels)
+	donutVals := wave(30, 18, 4, chartPhase+0.9)
+	for i := range donutVals {
+		if donutVals[i] < 4 {
+			donutVals[i] = 4
+		}
+	}
+	chartDonut.Series = ui.PieSeries(donutVals, chartDonut.Labels)
+	chartRadar.Series = []ui.Series{
+		{Name: "当前版本", Values: []float64{88, 92, 78, 70, 86}},
+		{Name: "上个版本", Values: []float64{72, 80, 74, 64, 78}},
+	}
+	chartScatter.Series = []ui.Series{
+		{Name: "集群 A", Color: "#34d399", Values: wave(42, 26, 26, chartPhase)},
+		{Name: "集群 B", Color: "#a78bfa", Values: wave(64, 30, 26, chartPhase+2.2)},
+	}
+}
+
+// pickChart 点击回调：只改文字状态，不动图表缓存。
+func pickChart(kind string, c *ui.Chart, s, i int) {
+	if s < 0 || s >= len(c.Series) {
+		return
+	}
+	ser := c.Series[s]
+	// 饼图 / 环形图：每个系列就是一个扇区，没有「X 轴标签」的概念，
+	// 直接输出扇区名 + 自身数值（否则会拼上第一个标签，如「华东 · 华南」）。
+	if c.Type == ui.ChartPie || c.Type == ui.ChartDonut {
+		sum := 0.0
+		for _, x := range ser.Values {
+			sum += x
+		}
+		chartPicked = fmt.Sprintf("选中 %s · %s = %v%s", kind, ser.Name, sum, c.Unit)
+		ui.RequestRedraw()
+		return
+	}
+	name, label, v := kind, "", 0.0
+	name = kind + " · " + ser.Name
+	if i >= 0 && i < len(ser.Values) {
+		v = ser.Values[i]
+	}
+	if i >= 0 && i < len(c.Labels) {
+		label = c.Labels[i]
+	}
+	chartPicked = fmt.Sprintf("选中 %s：%s = %v%s", name, label, v, c.Unit)
+	ui.RequestRedraw()
+}
+
+// chartCard 图表卡片（固定高度，宽度均分）。
+func chartCard(title, sub string, chart *ui.Chart, h float32) *ui.Node {
+	return ui.Card(
+		ui.Title(title, sub),
+		ui.ChartView("chart-"+title, chart).St(ui.St().GrowTo(1).H(h)),
+	).St(ui.St().GrowTo(1).FlexBasis(1).W(520).Padding(16).GapOf(10).R(14).
+		BgC(ui.ColBg).Stroke(1, ui.ColStroke))
+}
+
+// chartsCase 图表展示页。
+func chartsCase() *ui.Node {
+	ensureCharts()
+	return ui.Column(
+		pageHead("图表组件", "纯自绘 / 纹理缓存 / 悬浮提示 / 跟随主题，数据不变时每帧只发 1~2 个 draw call"),
+		ui.Row(
+			chartCard("折线图", "Smooth 平滑 + 数据点", chartLine, 200),
+			chartCard("面积图", "堆叠 + 半透明填充", chartArea, 200),
+		).St(ui.St().GapOf(16)),
+		ui.Row(
+			chartCard("柱状图", "分组柱 / 悬浮高亮 / 点击回传", chartBar, 190),
+			chartCard("饼图", "扇区间隙 + 悬浮提示", chartPie, 190),
+		).St(ui.St().GapOf(16)),
+		ui.Row(
+			chartCard("环形图", "内径 58%", chartDonut, 190),
+			chartCard("雷达图", "多系列多边形叠加", chartRadar, 190),
+		).St(ui.St().GapOf(16)),
+		ui.Row(
+			chartCard("散点图", "数值点密度展示", chartScatter, 190),
+			ui.Card(
+				ui.Title("实现与性能", "为什么图表不卡也不吃内存"),
+				ui.Text("· 网格 / 柱 / 文字全部用原生顶点绘制，零纹理、永远清晰").St(ui.St().Text(11.5, 400, ui.ColTextDim)),
+				ui.Text("· 只有弧线 / 斜线 / 多边形（折线、饼、雷达、散点）光栅成一张 RGBA 纹理").St(ui.St().Text(11.5, 400, ui.ColTextDim)),
+				ui.Text("· 纹理按「尺寸 + 缩放 + 主题 + 数据指纹」缓存，不变则每帧 0 CPU 光栅化").St(ui.St().Text(11.5, 400, ui.ColTextDim)),
+				ui.Text("· 总预算 24MB，超出按 LRU 淘汰，窗口销毁随 GL 上下文释放").St(ui.St().Text(11.5, 400, ui.ColTextDim)),
+				ui.Text("· 悬浮高亮与提示框全用原生图元叠加，鼠标移动不重建纹理").St(ui.St().Text(11.5, 400, ui.ColTextDim)),
+			).St(ui.St().GrowTo(1).FlexBasis(1).W(520).Padding(16).GapOf(8).R(14).
+				BgC(ui.ColBg).Stroke(1, ui.ColStroke)),
+		).St(ui.St().GapOf(16)),
+		ui.Row(
+			ui.Text(chartPicked).St(ui.St().Text(12, 500, ui.ColTextDim).GrowTo(1)),
+			ui.Btn("刷新数据", ui.BtnPrimary, func() {
+				chartPhase += 0.57
+				applyChartData()
+				chartPicked = "数据已更新（缓存失效并重建一次纹理）"
+				ui.RequestRedraw()
+			}),
+		).St(ui.St().GapOf(12)).AlignTo(ui.AlignCenter),
+	).St(ui.St().Padding(26).GapOf(16))
+}
+
 // ---- 案例六：控件总览 ----
 
 // act 生成一个"写提示 + 重绘"的回调。
 func act(msg string) func() {
 	return func() {
-		toast = msg
+		toastShow(msg)
 		ui.RequestRedraw()
 	}
 }
@@ -987,7 +1181,7 @@ func controlsCase() *ui.Node {
 				ctrlTab = k
 			}),
 			ui.Breadcrumb([]string{"首页", "组件", "导航"}, func(i int) {
-				toast = "面包屑第 " + strconv.Itoa(i+1) + " 级"
+				toastShow("面包屑第 " + strconv.Itoa(i+1) + " 级")
 				ui.RequestRedraw()
 			}),
 			ui.Row(
@@ -1008,7 +1202,7 @@ func controlsCase() *ui.Node {
 					{cell("输入法支持"), ui.Tag("待开始", "#fbbf24"), ui.Ring(0.15, 20, ui.ColWarn), cell("张三")},
 				}, func(i int) {
 					ctrlRow = i
-					toast = "选中第 " + strconv.Itoa(i+1) + " 行"
+					toastShow("选中第 " + strconv.Itoa(i+1) + " 行")
 					ui.RequestRedraw()
 				}),
 			ui.If(ctrlRow >= 0, func() *ui.Node {
@@ -1041,6 +1235,15 @@ var (
 	sysMsg       = "点击下方按钮体验文件对话框 / 多窗口 / 托盘"
 	sysScrollRow = -1
 	sysIme       = ""
+
+	// 拖入文件 / 系统操作演示状态
+	sysDropPaths  []string
+	sysDropMsg    = "把文件或文件夹拖到上面的框里松手，这里会显示结果"
+	sysClipText   = ""
+	sysTopMost    bool
+	sysHotkeyID   int32
+	sysWakeLock   bool
+	sysHotkeyNote = "未注册"
 )
 
 // sysSampleImage 找一个系统自带壁纸作为图片演示素材。
@@ -1068,6 +1271,36 @@ func sysSection(title, sub string, body *ui.Node) *ui.Node {
 		ui.Title(title, sub),
 		body,
 	).St(ui.St().GapOf(10).PadOnly(0, 0, 10, 0))
+}
+
+// sysPickImage 从拖入的路径里挑一张能解码的图片（自动填到图片预览区）。
+func sysPickImage(paths []string) string {
+	for _, p := range paths {
+		switch strings.ToLower(filepath.Ext(p)) {
+		case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp":
+			if w, _ := ui.ImageSize(p); w > 0 {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// sysDropAccept 统一的拖入处理（节点级 DropZone 与窗口级兜底共用）。
+func sysDropAccept(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	sysDropPaths = paths
+	if p := sysPickImage(paths); p != "" {
+		sysImgPath = p
+		sysDropMsg = fmt.Sprintf("收到 %d 项，已把图片送入上方预览：%s", len(paths), filepath.Base(p))
+	} else if len(paths) == 1 {
+		sysDropMsg = "收到 1 项：" + paths[0]
+	} else {
+		sysDropMsg = fmt.Sprintf("收到 %d 项：%s …", len(paths), filepath.Base(paths[0]))
+	}
+	ui.RequestRedraw()
 }
 
 func sysCase() *ui.Node {
@@ -1273,15 +1506,191 @@ func sysCase() *ui.Node {
 		ui.Text(sysMsg).St(ui.St().Text(11.5, 400, ui.ColTextMuted).WrapOn()),
 	).St(ui.St().GapOf(10))
 
+	// ---- 拖入文件：节点级 DropZone + 窗口级兜底回调 ----
+	if a := ui.Current(); a != nil {
+		a.SetOnDropFiles(func(paths []string, x, y float32) {
+			sysDropMsg = fmt.Sprintf("窗口级回调：%d 项，落点 %.0f, %.0f", len(paths), x, y)
+			sysDropPaths = paths
+			if p := sysPickImage(paths); p != "" {
+				sysImgPath = p
+			}
+			ui.RequestRedraw()
+		})
+	}
+	dropBody := ui.Column(
+		ui.DropZone("sys-drop", "把文件 / 文件夹拖到这里松手", 138, sysDropAccept),
+		ui.Text(sysDropMsg).St(ui.St().Text(11.5, 400, ui.ColTextMuted).WrapOn()),
+	)
+	if len(sysDropPaths) > 0 {
+		dropBody.Add(ui.Scroll(
+			ui.Column(ui.Each(sysDropPaths, func(p string, _ int) *ui.Node {
+				return ui.FileRow(p, nil)
+			})...).St(ui.St().GapOf(4)),
+		).St(ui.St().H(168).R(10).Padding(6).BgC("rgba(255,255,255,0.02)").Stroke(1, ui.ColStroke)).
+			K("sys-drop-list"))
+	}
+	dropBody.Add(ui.Wrap(
+		ui.Btn("选择文件（多选）", ui.BtnSecondary, func() {
+			if ps, ok := ui.PickFiles("选择文件（可多选）", "所有文件|*.*"); ok {
+				sysDropAccept(ps)
+			}
+		}),
+		ui.Btn("复制路径", ui.BtnGhost, func() {
+			if len(sysDropPaths) == 0 {
+				sysDropMsg = "还没有拖入文件"
+			} else if ui.ClipboardSetFiles(sysDropPaths) {
+				sysDropMsg = fmt.Sprintf("已复制 %d 个路径到剪贴板（可粘贴到资源管理器）", len(sysDropPaths))
+			} else {
+				sysDropMsg = "复制到剪贴板失败"
+			}
+			ui.RequestRedraw()
+		}),
+		ui.Btn("定位文件", ui.BtnGhost, func() {
+			if len(sysDropPaths) == 0 {
+				sysDropMsg = "还没有拖入文件"
+			} else if ui.RevealInExplorer(sysDropPaths[0]) {
+				sysDropMsg = "已在资源管理器中定位：" + sysDropPaths[0]
+			}
+			ui.RequestRedraw()
+		}),
+		ui.Btn("移入回收站", ui.BtnDanger, func() {
+			if len(sysDropPaths) == 0 {
+				sysDropMsg = "还没有拖入文件"
+				return
+			}
+			n := 0
+			for _, p := range sysDropPaths {
+				if ui.MoveToRecycleBin(p) {
+					n++
+				}
+			}
+			sysDropMsg = fmt.Sprintf("已移入回收站 %d / %d 项（可从回收站还原）", n, len(sysDropPaths))
+			sysDropPaths = nil
+			ui.RequestRedraw()
+		}),
+		ui.Btn("清空列表", ui.BtnGhost, func() {
+			sysDropPaths = nil
+			sysDropMsg = "已清空拖入列表"
+			ui.RequestRedraw()
+		}),
+	).St(ui.St().GapOf(8)))
+
+	// ---- 系统操作能力 ----
+	opsBody := ui.Column(
+		ui.Row(
+			ui.Text("窗口置顶").St(ui.St().Text(12.5, 500, ui.ColTextDim).W(84)),
+			ui.Switch("sys-top", sysTopMost, func(v bool) {
+				sysTopMost = v
+				ui.SetAlwaysOnTop(v)
+				if v {
+					sysMsg = "已置顶：切到其它窗口时本窗口仍在最上层"
+				} else {
+					sysMsg = "已取消置顶"
+				}
+				ui.RequestRedraw()
+			}),
+			ui.Text("HWND_TOPMOST / HWND_NOTOPMOST").St(ui.St().Text(11, 400, ui.ColTextMuted)),
+		).St(ui.St().GapOf(12)).AlignTo(ui.AlignCenter),
+		ui.Row(
+			ui.Text("全局热键").St(ui.St().Text(12.5, 500, ui.ColTextDim).W(84)),
+			ui.Btn("注册 Ctrl+Alt+G", ui.BtnSecondary, func() {
+				if sysHotkeyID != 0 {
+					sysHotkeyNote = "已注册，先注销"
+					ui.RequestRedraw()
+					return
+				}
+				id := ui.RegisterHotkey(ui.HotCtrl|ui.HotAlt, 'G', func() {
+					sysHotkeyNote = "热键已触发（窗口失焦也有效）"
+					ui.RequestRedraw()
+				})
+				sysHotkeyID = id
+				if id == 0 {
+					sysHotkeyNote = "注册失败：组合可能被其它程序占用"
+				} else {
+					sysHotkeyNote = fmt.Sprintf("已注册 id=%d", id)
+				}
+				ui.RequestRedraw()
+			}),
+			ui.Btn("注销", ui.BtnGhost, func() {
+				if sysHotkeyID != 0 {
+					ui.UnregisterHotkey(sysHotkeyID)
+					sysHotkeyID = 0
+					sysHotkeyNote = "已注销"
+				} else {
+					sysHotkeyNote = "当前没有热键"
+				}
+				ui.RequestRedraw()
+			}),
+			ui.Text(sysHotkeyNote).St(ui.St().Text(11, 400, ui.ColTextMuted)),
+		).St(ui.St().GapOf(12)).AlignTo(ui.AlignCenter),
+		ui.Row(
+			ui.Text("屏保常亮").St(ui.St().Text(12.5, 500, ui.ColTextDim).W(84)),
+			ui.Switch("sys-awake", sysWakeLock, func(v bool) {
+				sysWakeLock = v
+				ui.SetKeepAwake(v)
+				if v {
+					sysMsg = "已调用 SetThreadExecutionState：不会休眠、不会关屏"
+				} else {
+					sysMsg = "已恢复默认电源策略"
+				}
+				ui.RequestRedraw()
+			}),
+			ui.Text("ES_CONTINUOUS | ES_DISPLAY_REQUIRED").St(ui.St().Text(11, 400, ui.ColTextMuted)),
+		).St(ui.St().GapOf(12)).AlignTo(ui.AlignCenter),
+		ui.Row(
+			ui.Text("剪贴板").St(ui.St().Text(12.5, 500, ui.ColTextDim).W(84)),
+			ui.Input("sys-clip", sysClipText, "输入文本后点「写入剪贴板」", func(v string) {
+				sysClipText = v
+			}),
+			ui.Btn("写入", ui.BtnSecondary, func() {
+				if ui.ClipboardSetText(sysClipText) {
+					sysMsg = "已写入剪贴板：" + sysClipText
+				} else {
+					sysMsg = "写入剪贴板失败"
+				}
+				ui.RequestRedraw()
+			}),
+			ui.Btn("读取", ui.BtnGhost, func() {
+				sysClipText = ui.ClipboardText()
+				sysMsg = "剪贴板内容：" + sysClipText
+				ui.RequestRedraw()
+			}),
+		).St(ui.St().GapOf(10)).AlignTo(ui.AlignCenter),
+		ui.Row(
+			ui.Text("托盘通知").St(ui.St().Text(12.5, 500, ui.ColTextDim).W(84)),
+			ui.Btn("弹出气泡", ui.BtnSecondary, func() {
+				if sysTray == nil {
+					sysMsg = "请先在上方「多窗口 / 托盘」里创建托盘图标"
+				} else {
+					sysTray.Notify("GoGUI 系统能力", "这是一条 NIF_INFO 气泡通知")
+					sysMsg = "已弹出托盘气泡通知"
+				}
+				ui.RequestRedraw()
+			}),
+			ui.Btn("检测系统主题", ui.BtnGhost, func() {
+				mode := "浅色"
+				if ui.SystemDarkMode() {
+					mode = "深色"
+				}
+				sysMsg = "注册表 AppsUseLightTheme：系统当前为" + mode + "模式"
+				ui.RequestRedraw()
+			}),
+			ui.Text("NIF_INFO 气泡 / RegQueryValueEx").St(ui.St().Text(11, 400, ui.ColTextMuted)),
+		).St(ui.St().GapOf(12)).AlignTo(ui.AlignCenter),
+		ui.Text(sysMsg).St(ui.St().Text(11.5, 400, ui.ColTextMuted).WrapOn()),
+	).St(ui.St().GapOf(10))
+
 	return ui.Column(
-		pageHead("系统能力", "图片 / 毛玻璃 / Emoji / 动画 / 滚动条 / 输入法 / 多窗口"),
+		pageHead("系统能力", "图片 / 拖入文件 / 毛玻璃 / Emoji / 动画 / 输入法 / 滚动条 / 系统操作"),
 		sysSection("图片解码与纹理绘制", "PNG/JPEG/GIF/BMP → RGBA 纹理 → 圆角裁剪", imgBody),
+		sysSection("拖入文件 WM_DROPFILES", "拖到窗口内松手 → 落点命中节点 OnDrop → 路径列表 / 图片自动预览", dropBody),
 		sysSection("毛玻璃 backdrop-filter", "离屏 FBO + Kawase 模糊", glass),
 		sysSection("动画系统", "Tween / Spring / Keyframes，仅在有动画时逐帧重绘", anim),
 		sysSection("多字体与彩色 Emoji", "opentype 主字体 + Segoe UI Symbol fallback + GDI 彩色 Emoji", fontRow),
 		sysSection("输入法（IME）", "WM_IME_COMPOSITION 组合串预览与上屏", ime),
 		sysSection("滚动条", "内容溢出时显示，悬停加宽、可拖拽", scrollDemo),
 		sysSection("多窗口 / 托盘 / 文件对话框", "独立 GL 上下文窗口、任务栏托盘、系统对话框", platform),
+		sysSection("系统操作能力", "置顶 / 全局热键 / 托盘气泡 / 剪贴板 / 阻止休眠 / 深浅色 / 回收站", opsBody),
 	).St(ui.St().Padding(26).GapOf(18))
 }
 
@@ -2122,7 +2531,6 @@ func musicCase() *ui.Node {
 	).St(ui.St().Padding(26).GapOf(16))
 }
 
-
 // ---- 案例：Markdown 渲染 ----
 
 // mdDemoTab 当前示例文档页签（跨帧保持）。
@@ -2279,21 +2687,112 @@ const mdSampleLong = `# 长文与目录
 
 ## 三、已知限制
 
-- 远程图片不支持（Image 只接受本地路径），会降级为占位卡；
+- 远程图片会下载到临时目录缓存后正常显示（浏览器版仍为占位卡）；
 - 音视频块降级为占位卡，真正播放请用 MusicPlayer / VideoPlayer；
-- 数学公式与 Mermaid 暂未实现；
+- 数学公式为 LaTeX 子集，未覆盖的写法会退化成等宽源码；
 - 表格列宽按内容比例分配，列很多时会出现横向压缩。
 
 ## 四、后续计划
 
-- [ ] 数学公式（占位块）
-- [ ] Mermaid 代码块 → 提示卡
-- [ ] 目录锚点滚动
+- [x] 数学公式（LaTeX 子集真排版）
+- [x] Mermaid 代码块 → 提示卡
+- [x] 目录锚点滚动
 - [x] 代码高亮
 - [x] 图片 lightbox
 
 > 备注：组件文件为 ui/markdown.go（渲染）、ui/markdown_parse.go（解析）、
 > ui/markdown_highlight.go（着色）、ui/markdown_state.go（状态）。
+`
+
+// mdSampleNew 本轮新增渲染项的演示文档。
+const mdSampleNew = `# 新增渲染项
+
+本页演示本轮新增能力：数学公式、Mermaid 提示卡、脚注、定义列表、链接卡、diff 着色、上标下标、任务勾选与目录锚点滚动。
+
+## 一、数学公式
+
+行内：$E=mc^2$，求根公式写成 $x = (-b+\sqrt{b^2-4ac})/(2a)$，欧拉恒等式 $e^{i\pi}+1=0$。
+
+块级：
+
+$$
+f(x) = \frac{ab} + \sqrt{x^2+1}
+$$
+
+$$
+\sum_{k=1}^{n} k = \frac{n(n+12} + \int_0^1 x\,dx = \frac{12}
+$$
+
+矩阵与分段：
+
+$$
+A = \begin{pmatrix} a_{11} & a_{12} \\ a_{21} & a_{22} \end{pmatrix}, \quad |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}
+$$
+
+## 二、Mermaid 流程图（原生绘制）
+
+~~~mermaid
+flowchart LR
+  A[解析] --> B{有缓存?}
+  B -->|是| C[复用渲染树]
+  B -->|否| D[重建节点]
+  D --> E[写回缓存]
+~~~
+
+~~~mermaid
+flowchart TD
+  S[请求] --> P{命中缓存?}
+  P -->|是| R[返回渲染树]
+  P -->|否| B[解析源码]
+  B --> L[分层排版]
+  L --> R
+~~~
+
+## 三、脚注与定义列表
+
+脚注引用会自动上标并与文末条目互链[^1]，支持缩进续行[^2]。
+
+渲染树缓存
+: 相同输入复用同一批节点，滚动只做一次 map 查找。
+: 交互状态（页签 / 折叠 / 勾选）参与缓存键。
+
+性能
+: 长文档命中缓存后单帧只剩节点指针复制。
+
+## 四、链接卡与自动链接
+
+https://go.dev/doc/
+
+裸链接同样可点击：https://github.com/golang/go
+
+## 五、diff 代码块
+
+~~~diff
+--- a/ui/markdown.go
++++ b/ui/markdown.go
+@@ -12,3 +12,4 @@
+-// 旧：每帧重建整篇文档
++// 新：渲染树缓存 + 状态版本号
++// 新：diff 行底色
+~~~
+
+## 六、任务列表可勾选
+
+- [x] 数学公式排版
+- [ ] 点击方块可切换勾选状态
+
+## 七、目录锚点滚动
+
+点击下面目录条目可平滑滚动到对应小节。
+
+[toc]
+
+## 八、远程图片
+
+桌面端会下载并缓存到临时目录，浏览器版显示占位卡。
+
+[^1]: 脚注内容由 doc.Footnotes 统一渲染在文末。
+[^2]: 第二行缩进续写也归属于同一条脚注。
 `
 
 // markdownCase Markdown 组件示例页。
@@ -2303,6 +2802,7 @@ func markdownCase() *ui.Node {
 		{"ext", "扩展块", mdSampleExt},
 		{"code", "代码高亮", mdSampleCode},
 		{"long", "长文 / 目录", mdSampleLong},
+		{"new", "新增渲染", mdSampleNew},
 	}
 	keys := make([]string, 0, len(docs))
 	labels := make([]string, 0, len(docs))
@@ -2335,13 +2835,14 @@ func markdownCase() *ui.Node {
 		).St(ui.St().Padding(22).R(16).BgC(ui.ColBgDeep).Stroke(1, ui.ColStroke).GapOf(12)),
 	).St(ui.St().Padding(24).Wp(100))
 }
+
 // ---- 案例：WebView 内嵌浏览器（系统 WebView2）----
 
 var (
-wvInst  *ui.WebView
-wvAddr  = "https://www.bing.com"
-wvTried bool
-wvTip   string
+	wvInst  *ui.WebView
+	wvAddr  = "https://www.bing.com"
+	wvTried bool
+	wvTip   string
 )
 
 // webviewDemoHTML 本机示例页（离线也能看、能交互：输入 / 按钮 / 列表滚动）。
@@ -2404,94 +2905,95 @@ const webviewDemoHTML = `<!doctype html>
 
 // webviewCase WebView 组件演示页：自绘工具栏 + 真实网页。
 func webviewCase() *ui.Node {
-if !wvTried {
-wvTried = true
-if !ui.WebViewAvailable() {
-wvTip = "未检测到 WebView2 运行时，先安装 Microsoft Edge WebView2 Runtime"
-} else if wv, err := ui.NewWebView(ui.WebViewOptions{HTML: webviewDemoHTML}); err != nil {
-wvTip = "创建 WebView 失败：" + err.Error()
-} else {
-wvInst = wv
+	if !wvTried {
+		wvTried = true
+		if !ui.WebViewAvailable() {
+			wvTip = "未检测到 WebView2 运行时，先安装 Microsoft Edge WebView2 Runtime"
+		} else if wv, err := ui.NewWebView(ui.WebViewOptions{HTML: webviewDemoHTML}); err != nil {
+			wvTip = "创建 WebView 失败：" + err.Error()
+		} else {
+			wvInst = wv
 			wv.SetRadius(12)
-}
-}
+		}
+	}
 
-header := ui.Row(
-ui.Column(
-ui.Text("WebView 内嵌浏览器").St(ui.St().Text(19, 700, "#e8ecff")),
-ui.Text("系统 WebView2（Edge 内核）· 网页由 Chromium 的 GPU 进程渲染，交互与帧率都是原生的。").
-St(ui.St().Text(11.5, 400, ui.ColTextMuted)),
-).Grow(1).St(ui.St().GapOf(4)),
-ui.Tag("A 阶段 · HWND 托管", "#7dd3fc"),
-).St(ui.St().GapOf(12)).AlignTo(ui.AlignCenter)
+	header := ui.Row(
+		ui.Column(
+			ui.Text("WebView 内嵌浏览器").St(ui.St().Text(19, 700, "#e8ecff")),
+			ui.Text("系统 WebView2（Edge 内核）· 网页由 Chromium 的 GPU 进程渲染，交互与帧率都是原生的。").
+				St(ui.St().Text(11.5, 400, ui.ColTextMuted)),
+		).Grow(1).St(ui.St().GapOf(4)),
+		ui.Tag("A 阶段 · HWND 托管", "#7dd3fc"),
+	).St(ui.St().GapOf(12)).AlignTo(ui.AlignCenter)
 
-var bar *ui.Node
-if wvInst != nil {
-bar = ui.WebViewBar(wvInst, ui.WebViewBarOptions{
-Address:   wvAddr,
-Key:       "gv-addr",
-OnAddress: func(v string) { wvAddr = v },
-OnGo:      func() { navigateWebView(wvAddr) },
-ShowTitle: true,
-})
-} else {
-bar = ui.Row(
-ui.Text("浏览器不可用").St(ui.St().Text(12, 600, "#f87171")),
-).St(ui.St().Padding(10).R(10).BgC(ui.ColBgSoft).Stroke(1, ui.ColStroke))
-}
+	var bar *ui.Node
+	if wvInst != nil {
+		bar = ui.WebViewBar(wvInst, ui.WebViewBarOptions{
+			Address:   wvAddr,
+			Key:       "gv-addr",
+			OnAddress: func(v string) { wvAddr = v },
+			OnGo:      func() { navigateWebView(wvAddr) },
+			ShowTitle: true,
+		})
+	} else {
+		bar = ui.Row(
+			ui.Text("浏览器不可用").St(ui.St().Text(12, 600, "#f87171")),
+		).St(ui.St().Padding(10).R(10).BgC(ui.ColBgSoft).Stroke(1, ui.ColStroke))
+	}
 
-links := ui.Row(
-ui.Btn("本机示例", ui.BtnSecondary, func() {
-if wvInst != nil {
-wvInst.LoadHTML(webviewDemoHTML)
-wvTip = "已加载本机示例页（离线可交互）"
-}
-}),
-ui.Btn("Bing", ui.BtnSecondary, func() { navigateWebView("https://www.bing.com") }),
-ui.Btn("MDN", ui.BtnSecondary, func() { navigateWebView("https://developer.mozilla.org/zh-CN/") }),
-ui.Btn("GitHub", ui.BtnSecondary, func() { navigateWebView("https://github.com") }),
-ui.Spacer(),
-ui.Text(wvTip).St(ui.St().Text(11, 400, ui.ColTextMuted).WrapOn()),
-).St(ui.St().GapOf(8)).AlignTo(ui.AlignCenter)
+	links := ui.Row(
+		ui.Btn("本机示例", ui.BtnSecondary, func() {
+			if wvInst != nil {
+				wvInst.LoadHTML(webviewDemoHTML)
+				wvTip = "已加载本机示例页（离线可交互）"
+			}
+		}),
+		ui.Btn("Bing", ui.BtnSecondary, func() { navigateWebView("https://www.bing.com") }),
+		ui.Btn("MDN", ui.BtnSecondary, func() { navigateWebView("https://developer.mozilla.org/zh-CN/") }),
+		ui.Btn("GitHub", ui.BtnSecondary, func() { navigateWebView("https://github.com") }),
+		ui.Spacer(),
+		ui.Text(wvTip).St(ui.St().Text(11, 400, ui.ColTextMuted).WrapOn()),
+	).St(ui.St().GapOf(8)).AlignTo(ui.AlignCenter)
 
-status := ui.Box().St(ui.St().H(1))
-var area *ui.Node
-if wvInst != nil {
-status = ui.WebViewStatus(wvInst)
-if titleMenu.IsOpen() {
-// 菜单是自绘浮层，会被网页子窗口盖住，展开时先把网页临时隐藏
-area = ui.Center(
-ui.Column(
-ui.Text("菜单已展开 · 网页临时隐藏").St(ui.St().Text(13, 600, "#c7d2fe")),
-ui.Text("HWND 托管的网页永远在最上层，A 阶段无法被自绘浮层遮挡；升级到 DirectComposition 合成后可解除此限制。").
-St(ui.St().Text(11.5, 400, ui.ColTextMuted).WrapOn().TAlign(ui.AlignCenter)),
-).St(ui.St().GapOf(6)).AlignTo(ui.AlignCenter),
-).St(ui.St().GrowTo(1).R(12).BgC(ui.ColBgDeep).Stroke(1, ui.ColStroke))
-} else {
-area = ui.WebViewNode(wvInst).St(ui.St().GrowTo(1).R(12))
-}
-} else {
-area = ui.Center(
-ui.Column(
-ui.Text("WebView2 暂不可用").St(ui.St().Text(14, 600, "#f87171")),
-ui.Text(wvTip).St(ui.St().Text(11.5, 400, ui.ColTextMuted).WrapOn().TAlign(ui.AlignCenter)),
-).St(ui.St().GapOf(6)).AlignTo(ui.AlignCenter),
-).St(ui.St().GrowTo(1).R(12).BgC(ui.ColBgDeep).Stroke(1, ui.ColStroke))
-}
+	status := ui.Box().St(ui.St().H(1))
+	var area *ui.Node
+	if wvInst != nil {
+		status = ui.WebViewStatus(wvInst)
+		if titleMenu.IsOpen() {
+			// 菜单是自绘浮层，会被网页子窗口盖住，展开时先把网页临时隐藏
+			area = ui.Center(
+				ui.Column(
+					ui.Text("菜单已展开 · 网页临时隐藏").St(ui.St().Text(13, 600, "#c7d2fe")),
+					ui.Text("HWND 托管的网页永远在最上层，A 阶段无法被自绘浮层遮挡；升级到 DirectComposition 合成后可解除此限制。").
+						St(ui.St().Text(11.5, 400, ui.ColTextMuted).WrapOn().TAlign(ui.AlignCenter)),
+				).St(ui.St().GapOf(6)).AlignTo(ui.AlignCenter),
+			).St(ui.St().GrowTo(1).R(12).BgC(ui.ColBgDeep).Stroke(1, ui.ColStroke))
+		} else {
+			area = ui.WebViewNode(wvInst).St(ui.St().GrowTo(1).R(12))
+		}
+	} else {
+		area = ui.Center(
+			ui.Column(
+				ui.Text("WebView2 暂不可用").St(ui.St().Text(14, 600, "#f87171")),
+				ui.Text(wvTip).St(ui.St().Text(11.5, 400, ui.ColTextMuted).WrapOn().TAlign(ui.AlignCenter)),
+			).St(ui.St().GapOf(6)).AlignTo(ui.AlignCenter),
+		).St(ui.St().GrowTo(1).R(12).BgC(ui.ColBgDeep).Stroke(1, ui.ColStroke))
+	}
 
-return ui.Column(header, bar, links, status, area).
-St(ui.St().Padding(18).GapOf(12).Hp(100))
+	return ui.Column(header, bar, links, status, area).
+		St(ui.St().Padding(18).GapOf(12).Hp(100))
 }
 
 // navigateWebView 地址栏 / 快捷入口统一走这里（补全协议 + 提示）。
 func navigateWebView(url string) {
-if wvInst == nil {
-return
+	if wvInst == nil {
+		return
+	}
+	wvInst.Navigate(url)
+	wvTip = "正在打开 " + url
+	ui.RequestRedraw()
 }
-wvInst.Navigate(url)
-wvTip = "正在打开 " + url
-ui.RequestRedraw()
-}
+
 // 「表单与弹窗」案例：FormItem / Select / Textarea / NumberInput / SearchInput /
 // Chip / DateBox + Alert / Confirm / Prompt / Modal / Drawer。
 //
@@ -2622,7 +3124,7 @@ func formCase() *ui.Node {
 				formSearch = v
 			})),
 			ui.Row(
-				ui.Text("多选：" + tagSummary()).St(ui.St().Text(11.5, 400, ui.ColTextMuted)),
+				ui.Text("多选："+tagSummary()).St(ui.St().Text(11.5, 400, ui.ColTextMuted)),
 				ui.Spacer(),
 				ui.ChipRemovable("清空选择", func() {
 					formTags = map[string]bool{}
@@ -2735,9 +3237,9 @@ func formOverlays() *ui.Node {
 			ui.RequestRedraw()
 		})
 	modal := ui.ModalPanel(ui.DialogOpts{
-		Key:  "dlg-custom",
-		Open: dlgModal,
-		Kind: ui.DlgInfo,
+		Key:   "dlg-custom",
+		Open:  dlgModal,
+		Kind:  ui.DlgInfo,
 		Title: "表单快照",
 		BodyNode: ui.Column(
 			ui.Text("确认以下信息后提交：").St(ui.St().Text(12.5, 400, ui.ColTextDim)),

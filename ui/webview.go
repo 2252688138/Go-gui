@@ -63,8 +63,8 @@ func NewWebViewIn(a *App, opts WebViewOptions) (*WebView, error) {
 		return nil, errors.New("ui: 没有活动窗口，无法创建 WebView")
 	}
 	var compRoot uintptr
-	if a.comp != nil {
-		if v, verr := a.comp.NewVisual(); verr == nil {
+	if a.win.comp != nil {
+		if v, verr := a.win.comp.NewVisual(); verr == nil {
 			compRoot = v
 		}
 	}
@@ -508,14 +508,14 @@ func (a *App) syncWebViews() {
 		y := int32(math.Round(float64(r.Y * scale)))
 		w := int32(math.Round(float64(r.W * scale)))
 		h := int32(math.Round(float64(r.H * scale)))
-		if wv.compose && a.comp != nil {
+		if wv.compose && a.win.comp != nil {
 // B 阶段：网页是 DComp 图层——位置由视觉偏移决定，bounds 从 (0,0) 起算，
 // 圆角交给 IDCompositionRectangleClip（抗锯齿），不再用窗口区域硬裁。
-a.comp.SetVisualOffset(wv.compVisual, r.X*scale, r.Y*scale)
+a.win.comp.SetVisualOffset(wv.compVisual, r.X*scale, r.Y*scale)
 wv.core.SetBounds(0, 0, w, h)
 wv.core.SetVisible(true)
 if wv.radius > 0 {
-_ = a.comp.SetRoundedClip(wv.compVisual, 0, 0, float32(w), float32(h), wv.radius*scale)
+_ = a.win.comp.SetRoundedClip(wv.compVisual, 0, 0, float32(w), float32(h), wv.radius*scale)
 }
 } else {
 wv.core.SetBounds(x, y, w, h)

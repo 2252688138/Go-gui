@@ -24,15 +24,59 @@ GoGUI 优化构建脚本（体积优先）。
 ./build.ps1 -Dev                # 开发构建：保留符号、带控制台（stderr 日志可见）
 #>
 param(
-    [ValidateSet('gallery', 'demo', 'tools', 'all')]
+    [ValidateSet('gallery', 'demo', 'tools', 'all', 'web')]
     [string]$Target = 'gallery',
     [switch]$Upx,
     [switch]$Dev,
-    [string]$OutDir = 'dist'
+    [string]$OutDir = 'dist',
+    # 仅 web 目标：构建完启动本地静态服务器并打开浏览器
+    [switch]$Serve,
+    [int]$Port = 8088
 )
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $MyInvocation.MyCommand.Path)
+
+# ---- Web 目标：同一套 ui 代码编译成 WebAssembly（canvas + WebGL 2）----
+if ($Target -eq 'web') {
+    $env:CGO_ENABLED = '0'
+    $env:GOOS = 'js'
+    $env:GOARCH = 'wasm'
+    New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+    Write-Host '[web 1/4] go build ./cmd/gallery -> main.wasm' -ForegroundColor Cyan
+    & go build -trimpath -buildvcs=false -ldflags '-s -w' -o (Join-Path $OutDir 'main.wasm') ./cmd/gallery
+    if ($LASTEXITCODE -ne 0) { throw 'go build 失败：./cmd/gallery' }
+
+    Write-Host '[web 2/4] 复制 wasm_exec.js' -ForegroundColor Cyan
+    $goroot = (& go env GOROOT).Trim()
+    $exec = Join-Path $goroot 'lib\wasm\wasm_exec.js'
+    if (-not (Test-Path $exec)) { $exec = Join-Path $goroot 'misc\wasm\wasm_exec.js' }
+    Copy-Item $exec (Join-Path $OutDir 'wasm_exec.js') -Force
+
+    Write-Host '[web 3/4] 复制 index.html' -ForegroundColor Cyan
+    Copy-Item (Join-Path $PSScriptRoot 'web\app.html') (Join-Path $OutDir 'index.html') -Force
+
+    Write-Host '[web 4/4] 复制字体 -> font.ttf' -ForegroundColor Cyan
+    $font = 'C:\Windows\Fonts\simhei.ttf'
+    if (-not (Test-Path $font)) { $font = 'C:\Windows\Fonts\msyh.ttc' }
+    if (-not (Test-Path $font)) { throw "找不到可用字体：$font" }
+    Copy-Item $font (Join-Path $OutDir 'font.ttf') -Force
+
+    $w = Get-Item (Join-Path $OutDir 'main.wasm')
+    Write-Host ''
+    Write-Host ('main.wasm  {0:N2} MB' -f ($w.Length / 1MB)) -ForegroundColor Green
+    Write-Host ('输出目录   {0}' -f (Resolve-Path $OutDir)) -ForegroundColor Green
+    Write-Host ('本地预览   http://127.0.0.1:{0}/   (加 -Serve 自动打开)' -f $Port) -ForegroundColor Yellow
+
+    if ($Serve) {
+        # 起本地服务器必须回到宿主平台，否则 GOOS=js 的 go run 无法执行
+        $env:GOOS = 'windows'
+        $env:GOARCH = 'amd64'
+        & go run ./web/server -dir $OutDir -addr ('127.0.0.1:{0}' -f $Port) -open
+    }
+    return
+}
 
 $env:CGO_ENABLED = '0'
 $env:GOOS = 'windows'

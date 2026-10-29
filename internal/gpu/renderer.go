@@ -5,17 +5,19 @@ import (
 	"math"
 	"os"
 	"strconv"
-	"unsafe"
 
 	"gogui/internal/geom"
 	"gogui/internal/text"
-	"gogui/internal/win32"
 )
 
 const (
 	maxVerts        = 60000
 	floatsShapeVert = 22
 	floatsTextVert  = 9
+	// 顶点数据切片的初始容量（顶点数）：按典型一屏预留，避免开窗即占 ~7.5MB，
+	// 同时保证常规页面不会反复扩容（append 在超过 maxVerts 时会先 flush）。
+	maxVertsShapeInitial = 8192
+	maxVertsTextInitial  = 20480
 )
 
 type batchKind uint8
@@ -94,6 +96,7 @@ type Renderer struct {
 	uResolveTex   int32
 	uResolveTexel int32
 	uResolveSpan  int32
+	uResolveSharp int32
 }
 
 // NewRenderer 创建渲染器。
@@ -117,18 +120,13 @@ func defaultTextGamma() float32 {
 }
 
 // textGammaFor 当前超采样下的字形覆盖率 gamma。
-// 超采样把边缘覆盖率算得更准（降采样时 16 个子样本取平均），原先为 1× 补偿的加粗
-// 会显得过重，因此按 1/ss 把补偿量收敛：ss=1 用 g，ss=2 用 1-(1-g)/2。
+//
+// 超采样的降采样是「子样本线性平均」，gamma 补偿作用在平均之后并不会失真，
+// 因此不需要（也不应该）按 1/ss 收敛。旧实现让 2× 下的补偿从 0.55 弱化到 0.775，
+// 细笔画的覆盖率被压低，文字明显发灰发虚——观感反而比 1:1 更「不清晰」。
+// 现在所有倍率统一使用同一补偿值：SSAA 只提升几何/边缘精度，不改变笔画实度。
 func (r *Renderer) textGammaFor() float32 {
-	g := r.textGamma
-	if r.ssaa <= 1.01 || g >= 1 {
-		return g
-	}
-	v := 1 - (1-g)/r.ssaa
-	if v < g {
-		v = g
-	}
-	return v
+	return r.textGamma
 }
 
 func (r *Renderer) Init() error {
@@ -141,15 +139,15 @@ func (r *Renderer) Init() error {
 		return fmt.Errorf("text shader: %w", err)
 	}
 	r.shapeProg, r.textProg = p1, p2
-	r.uShapeVP = win32.GlGetUniformLocation(p1, cstr("uViewport"))
-	r.uTextVP = win32.GlGetUniformLocation(p2, cstr("uViewport"))
-	r.uTextAtlas = win32.GlGetUniformLocation(p2, cstr("uAtlas"))
-	r.uTextGamma = win32.GlGetUniformLocation(p2, cstr("uTextGamma"))
+	r.uShapeVP = glGetUniformLocation(p1, "uViewport")
+	r.uTextVP = glGetUniformLocation(p2, "uViewport")
+	r.uTextAtlas = glGetUniformLocation(p2, "uAtlas")
+	r.uTextGamma = glGetUniformLocation(p2, "uTextGamma")
 
-	win32.GlGenVertexArrays(1, &r.shapeVAO)
-	win32.GlGenBuffers(1, &r.shapeVBO)
-	win32.GlBindVertexArray(r.shapeVAO)
-	win32.GlBindBuffer(win32.GL_ARRAY_BUFFER, r.shapeVBO)
+	glGenVertexArrays(1, &r.shapeVAO)
+	glGenBuffers(1, &r.shapeVBO)
+	glBindVertexArray(r.shapeVAO)
+	glBindBuffer(GL_ARRAY_BUFFER, r.shapeVBO)
 	sd := int32(floatsShapeVert * 4)
 	setAttr(0, 2, sd, 0)
 	setAttr(1, 2, sd, 8)
@@ -159,21 +157,21 @@ func (r *Renderer) Init() error {
 	setAttr(5, 4, sd, 56)
 	setAttr(6, 4, sd, 72)
 
-	win32.GlGenVertexArrays(1, &r.textVAO)
-	win32.GlGenBuffers(1, &r.textVBO)
-	win32.GlBindVertexArray(r.textVAO)
-	win32.GlBindBuffer(win32.GL_ARRAY_BUFFER, r.textVBO)
+	glGenVertexArrays(1, &r.textVAO)
+	glGenBuffers(1, &r.textVBO)
+	glBindVertexArray(r.textVAO)
+	glBindBuffer(GL_ARRAY_BUFFER, r.textVBO)
 	td := int32(floatsTextVert * 4)
 	setAttr(0, 2, td, 0)
 	setAttr(1, 2, td, 8)
 	setAttr(2, 4, td, 16)
 	setAttr(3, 1, td, 32)
-	win32.GlBindVertexArray(0)
+	glBindVertexArray(0)
 
-	win32.GlDisable(win32.GL_DEPTH_TEST)
-	win32.GlDisable(win32.GL_CULL_FACE)
-	win32.GlEnable(win32.GL_BLEND)
-	win32.GlBlendFunc(win32.GL_SRC_ALPHA, win32.GL_ONE_MINUS_SRC_ALPHA)
+	glDisable(GL_DEPTH_TEST)
+	glDisable(GL_CULL_FACE)
+	glEnable(GL_BLEND)
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
 	white := make([]byte, 4*4)
 	for i := range white {
@@ -181,8 +179,11 @@ func (r *Renderer) Init() error {
 	}
 	r.White = r.NewTextureRGBA(2, 2, white)
 
-	r.shapeData = make([]float32, 0, maxVerts*floatsShapeVert)
-	r.textData = make([]float32, 0, maxVerts*floatsTextVert)
+	// 顶点缓冲初始容量按「典型一屏」预留，而不是按硬上限 maxVerts 预留：
+	// 旧实现一开窗就分配 60000×22×4B ≈ 5.3MB + 60000×9×4B ≈ 2.2MB 的 Go 切片，
+	// 而实际一屏通常只有几百到几千个顶点。缓冲区会按需扩容（上限仍为 maxVerts）。
+	r.shapeData = make([]float32, 0, maxVertsShapeInitial*floatsShapeVert)
+	r.textData = make([]float32, 0, maxVertsTextInitial*floatsTextVert)
 	if err := r.initImage(); err != nil {
 		return err
 	}
@@ -196,24 +197,20 @@ func (r *Renderer) Init() error {
 }
 
 func setAttr(loc uint32, size int32, stride, offset int32) {
-	win32.GlEnableVertexAttribArray(loc)
-	win32.GlVertexAttribPointer(loc, size, win32.GL_FLOAT, 0, stride, unsafe.Pointer(uintptr(offset)))
+	glEnableVertexAttribArray(loc)
+	glVertexAttribPointer(loc, size, GL_FLOAT, 0, stride, offset)
 }
 
 func (r *Renderer) NewTextureR8(w, h int, data []byte) *Texture {
 	var id uint32
-	win32.GlGenTextures(1, &id)
-	win32.GlBindTexture(win32.GL_TEXTURE_2D, id)
-	win32.GlPixelStorei(win32.GL_UNPACK_ALIGNMENT, 1)
-	var ptr unsafe.Pointer
-	if len(data) > 0 {
-		ptr = unsafe.Pointer(&data[0])
-	}
-	win32.GlTexImage2D(win32.GL_TEXTURE_2D, 0, win32.GL_R8, int32(w), int32(h), 0, win32.GL_RED, win32.GL_UNSIGNED_BYTE, ptr)
-	win32.GlTexParameteri(win32.GL_TEXTURE_2D, win32.GL_TEXTURE_MIN_FILTER, win32.GL_LINEAR)
-	win32.GlTexParameteri(win32.GL_TEXTURE_2D, win32.GL_TEXTURE_MAG_FILTER, win32.GL_LINEAR)
-	win32.GlTexParameteri(win32.GL_TEXTURE_2D, win32.GL_TEXTURE_WRAP_S, win32.GL_TEXTURE_WRAP_CLAMP_TO_EDGE)
-	win32.GlTexParameteri(win32.GL_TEXTURE_2D, win32.GL_TEXTURE_WRAP_T, win32.GL_TEXTURE_WRAP_CLAMP_TO_EDGE)
+	glGenTextures(1, &id)
+	glBindTexture(GL_TEXTURE_2D, id)
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, int32(w), int32(h), GL_RED, GL_UNSIGNED_BYTE, data)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_CLAMP_TO_EDGE)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_CLAMP_TO_EDGE)
 	return &Texture{ID: id, W: w, H: h, R8: true}
 }
 
@@ -221,25 +218,21 @@ func (r *Renderer) UpdateTextureR8(t *Texture, x, y, w, h int, data []byte) {
 	if t == nil || len(data) == 0 {
 		return
 	}
-	win32.GlBindTexture(win32.GL_TEXTURE_2D, t.ID)
-	win32.GlPixelStorei(win32.GL_UNPACK_ALIGNMENT, 1)
-	win32.GlTexSubImage2D(win32.GL_TEXTURE_2D, 0, int32(x), int32(y), int32(w), int32(h), win32.GL_RED, win32.GL_UNSIGNED_BYTE, unsafe.Pointer(&data[0]))
+	glBindTexture(GL_TEXTURE_2D, t.ID)
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+	glTexSubImage2D(GL_TEXTURE_2D, 0, int32(x), int32(y), int32(w), int32(h), GL_RED, GL_UNSIGNED_BYTE, data)
 }
 
 func (r *Renderer) NewTextureRGBA(w, h int, data []byte) *Texture {
 	var id uint32
-	win32.GlGenTextures(1, &id)
-	win32.GlBindTexture(win32.GL_TEXTURE_2D, id)
-	win32.GlPixelStorei(win32.GL_UNPACK_ALIGNMENT, 1)
-	var ptr unsafe.Pointer
-	if len(data) > 0 {
-		ptr = unsafe.Pointer(&data[0])
-	}
-	win32.GlTexImage2D(win32.GL_TEXTURE_2D, 0, win32.GL_RGBA8, int32(w), int32(h), 0, win32.GL_RGBA, win32.GL_UNSIGNED_BYTE, ptr)
-	win32.GlTexParameteri(win32.GL_TEXTURE_2D, win32.GL_TEXTURE_MIN_FILTER, win32.GL_LINEAR)
-	win32.GlTexParameteri(win32.GL_TEXTURE_2D, win32.GL_TEXTURE_MAG_FILTER, win32.GL_LINEAR)
-	win32.GlTexParameteri(win32.GL_TEXTURE_2D, win32.GL_TEXTURE_WRAP_S, win32.GL_TEXTURE_WRAP_CLAMP_TO_EDGE)
-	win32.GlTexParameteri(win32.GL_TEXTURE_2D, win32.GL_TEXTURE_WRAP_T, win32.GL_TEXTURE_WRAP_CLAMP_TO_EDGE)
+	glGenTextures(1, &id)
+	glBindTexture(GL_TEXTURE_2D, id)
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, int32(w), int32(h), GL_RGBA, GL_UNSIGNED_BYTE, data)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_CLAMP_TO_EDGE)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_CLAMP_TO_EDGE)
 	return &Texture{ID: id, W: w, H: h}
 }
 
@@ -257,7 +250,7 @@ func (r *Renderer) Resize(pw, ph int32, scale float32) {
 	r.scale = scale
 	r.width = float32(pw) / scale
 	r.height = float32(ph) / scale
-	win32.GlViewport(0, 0, pw, ph)
+	glViewport(0, 0, pw, ph)
 }
 
 // Bounds 逻辑尺寸。
@@ -314,9 +307,9 @@ func (r *Renderer) ensureSSAA() bool {
 	if rt == nil {
 		return false
 	}
-	win32.GlBindFramebuffer(win32.GL_FRAMEBUFFER, rt.fbo)
-	if win32.GlCheckFramebufferStatus(win32.GL_FRAMEBUFFER) != win32.GL_FRAMEBUFFER_COMPLETE {
-		win32.GlBindFramebuffer(win32.GL_FRAMEBUFFER, r.targetFBO)
+	glBindFramebuffer(GL_FRAMEBUFFER, rt.fbo)
+	if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE {
+		glBindFramebuffer(GL_FRAMEBUFFER, r.targetFBO)
 		r.dropSSAART()
 		return false
 	}
@@ -335,23 +328,38 @@ func (r *Renderer) Resolve() {
 	if dw < 1 || dh < 1 {
 		return
 	}
-	win32.GlBindFramebuffer(win32.GL_FRAMEBUFFER, r.targetFBO)
-	win32.GlViewport(0, 0, dw, dh)
-	win32.GlDisable(win32.GL_SCISSOR_TEST)
+	glBindFramebuffer(GL_FRAMEBUFFER, r.targetFBO)
+	glViewport(0, 0, dw, dh)
+	glDisable(GL_SCISSOR_TEST)
 	// 降采样是整屏覆盖写：关掉混合，避免半透明背景与目标里的旧内容再次混合
-	win32.GlDisable(win32.GL_BLEND)
+	glDisable(GL_BLEND)
 	r.clipOn = false
-	win32.GlUseProgram(r.resolveProg)
-	win32.GlUniform1i(r.uResolveTex, 0)
-	win32.GlUniform2f(r.uResolveTexel, 1/float32(r.ssaaRT.w), 1/float32(r.ssaaRT.h))
-	win32.GlUniform1f(r.uResolveSpan, float32(r.ssaaRT.w)/float32(dw))
-	win32.GlActiveTexture(win32.GL_TEXTURE0)
-	win32.GlBindTexture(win32.GL_TEXTURE_2D, r.ssaaRT.tex.ID)
-	win32.GlBindVertexArray(r.resolveVAO)
-	win32.GlDrawArrays(win32.GL_TRIANGLES, 0, 6)
-	win32.GlBindVertexArray(0)
+	glUseProgram(r.resolveProg)
+	glUniform1i(r.uResolveTex, 0)
+	glUniform2f(r.uResolveTexel, 1/float32(r.ssaaRT.w), 1/float32(r.ssaaRT.h))
+	glUniform1f(r.uResolveSpan, float32(r.ssaaRT.w)/float32(dw))
+	glUniform1f(r.uResolveSharp, ssaaSharpen())
+	glActiveTexture(GL_TEXTURE0)
+	glBindTexture(GL_TEXTURE_2D, r.ssaaRT.tex.ID)
+	glBindVertexArray(r.resolveVAO)
+	glDrawArrays(GL_TRIANGLES, 0, 6)
+	glBindVertexArray(0)
 	// 恢复混合（后续帧的常规绘制依赖它）
-	win32.GlEnable(win32.GL_BLEND)
+	glEnable(GL_BLEND)
+}
+
+// ssaaSharpen 降采样后的锐化强度（默认 0.2）。
+//
+// 整帧 box 降采样是「数学上正确」的，但 1px 级别的横竖笔与 1px 描边被平均后对比度下降，
+// 人眼主观上会觉得「超高清还不如 1:1 清晰」。这里补一道轻度 unsharp 把被平滑掉的
+// 高频成分找回一部分：0 = 关闭，0.15~0.3 为推荐区间，GOGUI_SS_SHARPEN 可覆盖。
+func ssaaSharpen() float32 {
+	if v := os.Getenv("GOGUI_SS_SHARPEN"); v != "" {
+		if f, err := strconv.ParseFloat(v, 32); err == nil && f >= 0 && f <= 1 {
+			return float32(f)
+		}
+	}
+	return 0.4
 }
 
 // initResolve 初始化降采样着色器与全屏四边形。
@@ -361,14 +369,15 @@ func (r *Renderer) initResolve() error {
 		return err
 	}
 	r.resolveProg = p
-	r.uResolveTex = win32.GlGetUniformLocation(p, cstr("uTex"))
-	r.uResolveTexel = win32.GlGetUniformLocation(p, cstr("uTexel"))
-	r.uResolveSpan = win32.GlGetUniformLocation(p, cstr("uSpan"))
+	r.uResolveTex = glGetUniformLocation(p, "uTex")
+	r.uResolveTexel = glGetUniformLocation(p, "uTexel")
+	r.uResolveSpan = glGetUniformLocation(p, "uSpan")
+	r.uResolveSharp = glGetUniformLocation(p, "uSharpen")
 
-	win32.GlGenVertexArrays(1, &r.resolveVAO)
-	win32.GlGenBuffers(1, &r.resolveVBO)
-	win32.GlBindVertexArray(r.resolveVAO)
-	win32.GlBindBuffer(win32.GL_ARRAY_BUFFER, r.resolveVBO)
+	glGenVertexArrays(1, &r.resolveVAO)
+	glGenBuffers(1, &r.resolveVBO)
+	glBindVertexArray(r.resolveVAO)
+	glBindBuffer(GL_ARRAY_BUFFER, r.resolveVBO)
 	quad := []float32{
 		-1, -1, 0, 0,
 		1, -1, 1, 0,
@@ -377,10 +386,10 @@ func (r *Renderer) initResolve() error {
 		1, 1, 1, 1,
 		-1, 1, 0, 1,
 	}
-	win32.GlBufferData(win32.GL_ARRAY_BUFFER, len(quad)*4, unsafe.Pointer(&quad[0]), win32.GL_STATIC_DRAW)
+	glBufferData(GL_ARRAY_BUFFER, quad, GL_STATIC_DRAW)
 	setAttr(0, 2, 16, 0)
 	setAttr(1, 2, 16, 8)
-	win32.GlBindVertexArray(0)
+	glBindVertexArray(0)
 	return nil
 }
 
@@ -400,11 +409,11 @@ func (r *Renderer) Begin(fill Paint) {
 	if r.ensureSSAA() {
 		r.drawFBO = r.ssaaRT.fbo
 	}
-	win32.GlBindFramebuffer(win32.GL_FRAMEBUFFER, r.drawFBO)
-	win32.GlViewport(0, 0, r.pw, r.ph)
-	win32.GlDisable(win32.GL_SCISSOR_TEST)
-	win32.GlClearColor(fill.R, fill.G, fill.B, fill.A)
-	win32.GlClear(win32.GL_COLOR_BUFFER_BIT)
+	glBindFramebuffer(GL_FRAMEBUFFER, r.drawFBO)
+	glViewport(0, 0, r.pw, r.ph)
+	glDisable(GL_SCISSOR_TEST)
+	glClearColor(fill.R, fill.G, fill.B, fill.A)
+	glClear(GL_COLOR_BUFFER_BIT)
 }
 
 func (r *Renderer) End() { r.flush() }
@@ -414,49 +423,49 @@ func (r *Renderer) Destroy() {
 	r.DestroyBlur()
 	r.dropSSAART()
 	if r.resolveVBO != 0 {
-		win32.GlDeleteBuffers(1, &r.resolveVBO)
+		glDeleteBuffers(1, &r.resolveVBO)
 	}
 	if r.resolveVAO != 0 {
-		win32.GlDeleteVertexArrays(1, &r.resolveVAO)
+		glDeleteVertexArrays(1, &r.resolveVAO)
 	}
 	if r.resolveProg != 0 {
-		win32.GlDeleteProgram(r.resolveProg)
+		glDeleteProgram(r.resolveProg)
 	}
 	if r.imgVBO != 0 {
-		win32.GlDeleteBuffers(1, &r.imgVBO)
+		glDeleteBuffers(1, &r.imgVBO)
 	}
 	if r.imgVAO != 0 {
-		win32.GlDeleteVertexArrays(1, &r.imgVAO)
+		glDeleteVertexArrays(1, &r.imgVAO)
 	}
 	if r.imgProg != 0 {
-		win32.GlDeleteProgram(r.imgProg)
+		glDeleteProgram(r.imgProg)
 	}
 	if r.blurVBO != 0 {
-		win32.GlDeleteBuffers(1, &r.blurVBO)
+		glDeleteBuffers(1, &r.blurVBO)
 	}
 	if r.blurVAO != 0 {
-		win32.GlDeleteVertexArrays(1, &r.blurVAO)
+		glDeleteVertexArrays(1, &r.blurVAO)
 	}
 	if r.blurProg != 0 {
-		win32.GlDeleteProgram(r.blurProg)
+		glDeleteProgram(r.blurProg)
 	}
 	if r.shapeVBO != 0 {
-		win32.GlDeleteBuffers(1, &r.shapeVBO)
+		glDeleteBuffers(1, &r.shapeVBO)
 	}
 	if r.textVBO != 0 {
-		win32.GlDeleteBuffers(1, &r.textVBO)
+		glDeleteBuffers(1, &r.textVBO)
 	}
 	if r.shapeVAO != 0 {
-		win32.GlDeleteVertexArrays(1, &r.shapeVAO)
+		glDeleteVertexArrays(1, &r.shapeVAO)
 	}
 	if r.textVAO != 0 {
-		win32.GlDeleteVertexArrays(1, &r.textVAO)
+		glDeleteVertexArrays(1, &r.textVAO)
 	}
 	if r.shapeProg != 0 {
-		win32.GlDeleteProgram(r.shapeProg)
+		glDeleteProgram(r.shapeProg)
 	}
 	if r.textProg != 0 {
-		win32.GlDeleteProgram(r.textProg)
+		glDeleteProgram(r.textProg)
 	}
 }
 
@@ -472,39 +481,39 @@ func (r *Renderer) flush() {
 	switch r.cur {
 	case batchShape:
 		if r.shapeN > 0 {
-			win32.GlUseProgram(r.shapeProg)
-			win32.GlUniform2f(r.uShapeVP, r.width, r.height)
-			win32.GlBindVertexArray(r.shapeVAO)
+			glUseProgram(r.shapeProg)
+			glUniform2f(r.uShapeVP, r.width, r.height)
+			glBindVertexArray(r.shapeVAO)
 			r.uploadVerts(&r.shapeVBO, &r.shapeBufCap, r.shapeData)
-			win32.GlDrawArrays(win32.GL_TRIANGLES, 0, int32(r.shapeN))
+			glDrawArrays(GL_TRIANGLES, 0, int32(r.shapeN))
 		}
 		r.shapeData = r.shapeData[:0]
 		r.shapeN = 0
 	case batchText:
 		if r.textN > 0 && r.curFont != nil {
 			tex := r.fontTexture(r.curFont)
-			win32.GlUseProgram(r.textProg)
-			win32.GlUniform2f(r.uTextVP, r.width, r.height)
-			win32.GlUniform1i(r.uTextAtlas, 0)
-			win32.GlUniform1f(r.uTextGamma, r.textGammaFor())
-			win32.GlActiveTexture(win32.GL_TEXTURE0)
-			win32.GlBindTexture(win32.GL_TEXTURE_2D, tex.ID)
-			win32.GlBindVertexArray(r.textVAO)
+			glUseProgram(r.textProg)
+			glUniform2f(r.uTextVP, r.width, r.height)
+			glUniform1i(r.uTextAtlas, 0)
+			glUniform1f(r.uTextGamma, r.textGammaFor())
+			glActiveTexture(GL_TEXTURE0)
+			glBindTexture(GL_TEXTURE_2D, tex.ID)
+			glBindVertexArray(r.textVAO)
 			r.uploadVerts(&r.textVBO, &r.textBufCap, r.textData)
-			win32.GlDrawArrays(win32.GL_TRIANGLES, 0, int32(r.textN))
+			glDrawArrays(GL_TRIANGLES, 0, int32(r.textN))
 		}
 		r.textData = r.textData[:0]
 		r.textN = 0
 	case batchImage:
 		if r.imgN > 0 && r.curTex != nil {
-			win32.GlUseProgram(r.imgProg)
-			win32.GlUniform2f(r.uImgVP, r.width, r.height)
-			win32.GlUniform1i(r.uImgTex, 0)
-			win32.GlActiveTexture(win32.GL_TEXTURE0)
-			win32.GlBindTexture(win32.GL_TEXTURE_2D, r.curTex.ID)
-			win32.GlBindVertexArray(r.imgVAO)
+			glUseProgram(r.imgProg)
+			glUniform2f(r.uImgVP, r.width, r.height)
+			glUniform1i(r.uImgTex, 0)
+			glActiveTexture(GL_TEXTURE0)
+			glBindTexture(GL_TEXTURE_2D, r.curTex.ID)
+			glBindVertexArray(r.imgVAO)
 			r.uploadVerts(&r.imgVBO, &r.imgBufCap, r.imgData)
-			win32.GlDrawArrays(win32.GL_TRIANGLES, 0, int32(r.imgN))
+			glDrawArrays(GL_TRIANGLES, 0, int32(r.imgN))
 		}
 		r.imgData = r.imgData[:0]
 		r.imgN = 0
@@ -521,14 +530,13 @@ func (r *Renderer) uploadVerts(vbo *uint32, capBytes *int, data []float32) {
 		return
 	}
 	n := len(data) * 4
-	win32.GlBindBuffer(win32.GL_ARRAY_BUFFER, *vbo)
+	glBindBuffer(GL_ARRAY_BUFFER, *vbo)
 	if *capBytes < n {
 		*capBytes = n + n/2 + 4096
-		win32.GlBufferData(win32.GL_ARRAY_BUFFER, *capBytes, nil, win32.GL_STREAM_DRAW)
 	}
-	// 孤儿化：解除与上一帧的依赖，避免驱动等待
-	win32.GlBufferData(win32.GL_ARRAY_BUFFER, *capBytes, nil, win32.GL_STREAM_DRAW)
-	win32.GlBufferSubData(win32.GL_ARRAY_BUFFER, 0, n, unsafe.Pointer(&data[0]))
+	// 孤儿化：解除与上一帧的依赖，避免驱动等待上一帧用完这块缓冲
+	glBufferAlloc(GL_ARRAY_BUFFER, *capBytes, GL_STREAM_DRAW)
+	glBufferSubData(GL_ARRAY_BUFFER, 0, data)
 }
 
 func (r *Renderer) fontTexture(f *text.Font) *Texture {
@@ -581,13 +589,13 @@ func (r *Renderer) uploadAtlasRegion(f *text.Font, t *Texture, x0, y0, x1, y1 in
 		return
 	}
 
-	win32.GlBindTexture(win32.GL_TEXTURE_2D, t.ID)
-	win32.GlPixelStorei(win32.GL_UNPACK_ALIGNMENT, 1)
+	glBindTexture(GL_TEXTURE_2D, t.ID)
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
 
 	// 整行范围：内存连续，直接上传
 	if x0 == 0 && x1 == dim {
 		off := y0 * dim * 4
-		win32.GlTexSubImage2D(win32.GL_TEXTURE_2D, 0, 0, int32(y0), int32(dim), int32(rows), win32.GL_RGBA, win32.GL_UNSIGNED_BYTE, unsafe.Pointer(&f.Atlas[off]))
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, int32(y0), int32(dim), int32(rows), GL_RGBA, GL_UNSIGNED_BYTE, f.Atlas[off:])
 		return
 	}
 
@@ -602,7 +610,7 @@ func (r *Renderer) uploadAtlasRegion(f *text.Font, t *Texture, x0, y0, x1, y1 in
 		src := (y0+i)*stride + x0*4
 		copy(buf[i*rowBytes:(i+1)*rowBytes], f.Atlas[src:src+rowBytes])
 	}
-	win32.GlTexSubImage2D(win32.GL_TEXTURE_2D, 0, int32(x0), int32(y0), int32(w), int32(rows), win32.GL_RGBA, win32.GL_UNSIGNED_BYTE, unsafe.Pointer(&buf[0]))
+	glTexSubImage2D(GL_TEXTURE_2D, 0, int32(x0), int32(y0), int32(w), int32(rows), GL_RGBA, GL_UNSIGNED_BYTE, buf)
 }
 
 // UpdateTextureRGBA 局部更新 RGBA 纹理。
@@ -610,9 +618,9 @@ func (r *Renderer) UpdateTextureRGBA(t *Texture, x, y, w, h int, data []byte) {
 	if t == nil || len(data) == 0 {
 		return
 	}
-	win32.GlBindTexture(win32.GL_TEXTURE_2D, t.ID)
-	win32.GlPixelStorei(win32.GL_UNPACK_ALIGNMENT, 1)
-	win32.GlTexSubImage2D(win32.GL_TEXTURE_2D, 0, int32(x), int32(y), int32(w), int32(h), win32.GL_RGBA, win32.GL_UNSIGNED_BYTE, unsafe.Pointer(&data[0]))
+	glBindTexture(GL_TEXTURE_2D, t.ID)
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+	glTexSubImage2D(GL_TEXTURE_2D, 0, int32(x), int32(y), int32(w), int32(h), GL_RGBA, GL_UNSIGNED_BYTE, data)
 }
 
 // DeleteTexture 释放一张纹理（画面尺寸变化、片源切换时调用）。
@@ -621,7 +629,7 @@ func (r *Renderer) DeleteTexture(t *Texture) {
 		return
 	}
 	id := t.ID
-	win32.GlDeleteTextures(1, &id)
+	glDeleteTextures(1, &id)
 	t.ID = 0
 }
 
@@ -647,8 +655,8 @@ func (r *Renderer) setClip(c geom.Rect) {
 	y := int32(float32(r.ph) - c.Bottom()*s)
 	w := int32(c.W * s)
 	h := int32(c.H * s)
-	win32.GlEnable(win32.GL_SCISSOR_TEST)
-	win32.GlScissor(x, y, w, h)
+	glEnable(GL_SCISSOR_TEST)
+	glScissor(x, y, w, h)
 	r.clipOn, r.clipCur = true, c
 }
 
@@ -657,7 +665,7 @@ func (r *Renderer) clearClip() {
 		return
 	}
 	r.flush()
-	win32.GlDisable(win32.GL_SCISSOR_TEST)
+	glDisable(GL_SCISSOR_TEST)
 	r.clipOn = false
 }
 
@@ -703,6 +711,12 @@ func (r *Renderer) pushShape(sh Shape) {
 }
 
 func (r *Renderer) appendQuad(rs geom.Rect, rad [4]float32, c1, c2 Paint, feather, mode, stroke float32) {
+	// 填充/描边的 SDF 边缘过渡带宽度按「设备像素」恒定：超采样时画布分辨率是 ss 倍，
+	// 若仍按逻辑像素给 0.7，过渡带在设备空间就变成 0.7*ss 像素，降采样后边缘反而更软，
+	// 白白吃掉超采样带来的锐度。这里除以 ss，让 1.25×/1.5×/2× 的边缘都比 1:1 更干净。
+	if r.ssaa > 1.01 && mode < 1.5 && feather > 0 {
+		feather /= r.ssaa
+	}
 	if r.shapeN+6 > maxVerts {
 		r.flush()
 		r.cur = batchShape
@@ -792,8 +806,3 @@ func (r *Renderer) Draw(instrs []Instr) {
 	}
 }
 
-func cstr(s string) *byte {
-	b := make([]byte, len(s)+1)
-	copy(b, s)
-	return &b[0]
-}

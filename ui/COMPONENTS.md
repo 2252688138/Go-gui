@@ -223,6 +223,52 @@ ui.Stack(page, ui.MarkdownLightbox())
 ---
 ## 4. 系统能力
 
+
+---
+
+## 8. 文件拖入与系统操作能力（ui/system.go + internal/win32/system.go）
+
+### 8.1 文件拖入（WM_DROPFILES）
+
+链路：`NewWindow` 默认 `DragAcceptFiles(hwnd, 1)` → 松手时系统投递 `WM_DROPFILES`
+→ `win32.dropEvent` 用 `DragQueryFileW` 取路径、`DragQueryPoint` 取落点（客户区物理像素）
+→ `EvDropFiles` 事件 → `App` 缓存到 `dropPending` → 下一帧 `frame()` 里用落点撞树（`hitDropTarget`）
+→ 最近的设了 `OnDrop` 的节点优先，否则给 `App` 级回调。
+
+| API | 说明 |
+| --- | --- |
+| `Node.DropEvt(fn func(paths []string))` | 节点级拖入回调（沿祖先冒泡，需在区域内松手） |
+| `ui.DropZone(key, hint, height, onDrop)` | 现成的拖入区域（图标 + 提示 + 边框） |
+| `App.SetOnDropFiles(fn)` / `ui.SetOnDropFiles(fn)` | 应用级兜底回调（x/y 为落点逻辑坐标） |
+| `App.SetAcceptDrops(bool)` / `ui.SetAcceptDrops(bool)` | 开关当前窗口的拖入接收 |
+| `ui.PickFiles(title, filter)` | 多选文件对话框（`OFN_ALLOWMULTISELECT`） |
+| `ui.FileRow(path, onClick)` / `ui.FormatBytes(n)` | 拖入结果行（名称 / 大小 / 目录）与字节格式化 |
+
+注意事项：
+
+- `WM_DROPFILES` 只在松手时到达，没有 dragenter/dragover，因此**没有悬停高亮**；
+  需要悬停高亮必须改用 OLE `IDropTarget`，本框架未提供。
+- 回调里 node 指针只在当前帧有效，因此分发统一放在 `frame()` 内（与 `OnClick` 同一时机）；
+  不要在事件回调里直接改界面状态以外的树结构。
+- 拖入路径不会自动过滤，需自行用 `ui.ImageSize` / 后缀判断；文件夹路径同样会出现在 `paths` 里。
+
+### 8.2 系统操作能力
+
+| API | 实现 | 说明 |
+| --- | --- | --- |
+| `ui.SetAlwaysOnTop(bool)` / `App.SetAlwaysOnTop` | `SetWindowPos(HWND_TOPMOST/NOTOPMOST)` | 窗口置顶 |
+| `ui.SetClipboardText` / `ui.ClipboardText` | CF_UNICODETEXT | 文本剪贴板读写 |
+| `ui.ClipboardSetFiles(paths)` | CF_HDROP（DROPFILES 头 + 双 NUL 宽字符表） | 复制文件引用到资源管理器 |
+| `ui.RegisterHotkey(mods, vk, fn)` / `UnregisterHotkey(id)` | `RegisterHotKey` + `WM_HOTKEY` | 全局热键（失焦/最小化也触发） |
+| `ui.SetKeepAwake(bool)` | `SetThreadExecutionState` | 阻止休眠与关屏 |
+| `ui.RevealInExplorer(path)` | `explorer.exe /select,"path"` | 定位文件 |
+| `ui.MoveToRecycleBin(path)` | `SHFileOperationW(FO_DELETE\|FOF_ALLOWUNDO)` | 移入回收站（可还原） |
+| `ui.SystemDarkMode()` | 读注册表 `AppsUseLightTheme` | 跟随系统深浅色 |
+| `(*Tray).Notify(title, msg)` | `Shell_NotifyIconW(NIF_INFO)` | 托盘气泡通知 |
+
+热键修饰键常量：`ui.HotAlt / HotCtrl / HotShift / HotWin / HotNoRepeat`；
+`RegisterHotkey` 内部已带上 `MOD_NOREPEAT`，返回 id（0 表示被其它程序占用）。
+热键回调在 UI 线程执行，可直接改状态并 `ui.RequestRedraw()`。
 | 文件 | 能力 |
 | --- | --- |
 | `ui/app.go` | `Run` / `Options` / `App`（`Minimize` / `SetFullscreen` / `Post`） |

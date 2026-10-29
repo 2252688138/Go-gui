@@ -1,3 +1,5 @@
+//go:build windows
+
 package win32
 
 import (
@@ -79,6 +81,59 @@ func openFileDialog(owner uintptr, title, filter, initialDir, defExt string, sav
 // OpenFile 弹出「打开文件」对话框。filter 形如 "图片|*.png;*.jpg|所有文件|*.*"。
 func OpenFile(owner uintptr, title, filter string) (string, bool) {
 	return openFileDialog(owner, title, filter, "", "", false)
+}
+
+// OpenFiles 弹出可多选的「打开文件」对话框，返回选中的全部路径。
+// 系统把多选结果存成「目录\0名1\0名2\0\0」，单选则是完整路径。
+func OpenFiles(owner uintptr, title, filter string) ([]string, bool) {
+	buf := make([]uint16, 32768)
+	ft := FileDialogFilter(filter)
+	var titleP *uint16
+	if title != "" {
+		t := syscall.StringToUTF16(title)
+		titleP = u16p(t)
+	}
+	ofn := OPENFILENAMEW{
+		HwndOwner:     owner,
+		LpstrFilter:   u16p(ft),
+		NFilterIndex:  1,
+		LpstrFile:     &buf[0],
+		NMaxFile:      uint32(len(buf)),
+		LpstrTitle:    titleP,
+		Flags:         OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_ALLOWMULTISELECT,
+	}
+	ofn.LStructSize = uint32(unsafe.Sizeof(ofn))
+	if GetOpenFileNameW(&ofn) == 0 {
+		return nil, false
+	}
+	// 按 NUL 切分
+	var parts []string
+	start := 0
+	for i, c := range buf {
+		if c == 0 {
+			if i == start {
+				break // 双 NUL 结束
+			}
+			parts = append(parts, syscall.UTF16ToString(buf[start:i]))
+			start = i + 1
+		}
+	}
+	if len(parts) == 0 {
+		return nil, false
+	}
+	if len(parts) == 1 {
+		return parts, true
+	}
+	dir := parts[0]
+	out := make([]string, 0, len(parts)-1)
+	for _, name := range parts[1:] {
+		if strings.ContainsAny(name, `\/`) {
+			out = append(out, name) // 已是完整路径
+			continue
+		}
+		out = append(out, strings.TrimRight(dir, `\/`)+`\`+name)
+	}
+	return out, len(out) > 0
 }
 
 // SaveFile 弹出「保存文件」对话框。

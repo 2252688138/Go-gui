@@ -14,13 +14,11 @@ import (
 	"path/filepath"
 	"sync"
 	"unicode"
-	"unsafe"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/font/sfnt"
 	"golang.org/x/image/math/fixed"
-	"golang.org/x/sys/windows"
 )
 
 // Glyph 字形在图集中的位置（位图尺寸/偏移均为物理像素）。
@@ -44,9 +42,12 @@ type Font struct {
 
 	Ascent, Descent, LineHeight float32 // 逻辑像素
 
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	cache map[glyphKey]*Glyph
-	face  font.Face
+	// measure 行宽缓存（逻辑像素）：UI 每帧都会重复测量同一批字符串，
+	// 逐字查字形 + 反复加锁在长列表/富文本页会吃掉大量时间，命中后只剩一次哈希查找。
+	measure map[string]float32
+	face    font.Face
 	// fallback 主字体缺字形时的后备字体（Symbol / Emoji 单色轮廓）
 	fallback font.Face
 	fallbackName string
@@ -104,6 +105,7 @@ func NewFont(faceName string, size float32, weight int32, scale float32) *Font {
 		Weight:    weight,
 		scale:     scale,
 		cache:     make(map[glyphKey]*Glyph, 512),
+		measure:   make(map[string]float32, 256),
 		AtlasSize: 0, // 懒分配：真正光栅化时才建图集
 	}
 	f.buildFace()
@@ -187,6 +189,8 @@ func (f *Font) SetScale(scale float32) {
 	f.scale = scale
 	f.buildFace()
 	f.cache = make(map[glyphKey]*Glyph, 512)
+	// 字号变了，行宽缓存全部失效
+	f.measure = make(map[string]float32, 256)
 	// 释放旧图集（懒分配：下次光栅化时按最小尺寸重建），并标记纹理需重建
 	f.Atlas = nil
 	f.AtlasSize = 0
@@ -198,8 +202,8 @@ func (f *Font) SetScale(scale float32) {
 
 // AtlasBytes 返回当前字形图集占用的字节数（懒分配，未使用时为 0）。
 func (f *Font) AtlasBytes() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	return len(f.Atlas)
 }
 
@@ -269,12 +273,22 @@ func (f *Font) TakeReset() bool {
 }
 
 // GlyphFor 取（必要时光栅化）字形。
+//
+// 热路径：命中的字形只在读锁下查一次 map（旧实现每字符都抢一次互斥锁，
+// 一屏文本每帧上千次加锁/解锁，是绘制阶段最贵的开销之一）。
+// 未命中才升级为写锁光栅化，并在写锁内复查一次避免重复光栅化。
 func (f *Font) GlyphFor(r rune) *Glyph {
+	f.mu.RLock()
 	px := int32(f.Size*f.scale + 0.5)
 	if px < 1 {
 		px = 1
 	}
 	key := glyphKey{r, px}
+	if g, ok := f.cache[key]; ok {
+		f.mu.RUnlock()
+		return g
+	}
+	f.mu.RUnlock()
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -485,14 +499,42 @@ func (f *Font) finishGlyph(ox, oy, bw, bh int, advance fixed.Int26_6, left, top 
 	return g
 }
 
+// measureCacheMax 行宽缓存条数上限：超出后整体丢弃重来，
+// 避免长文本/动态数字（计时器、滚动日志）把缓存撑成内存泄漏。
+const measureCacheMax = 8192
+
 // Measure 计算字符串行宽（逻辑像素）。
+//
+// 布局阶段（measureNode）与绘制阶段（paintText）每帧都会测量同一批字符串，
+// 这里按字符串整体缓存结果：命中即返回，避免逐字 GlyphFor + 除法。
 func (f *Font) Measure(s string) float32 {
+	if s == "" {
+		return 0
+	}
+	f.mu.RLock()
+	if w, ok := f.measure[s]; ok {
+		f.mu.RUnlock()
+		return w
+	}
+	sc := f.scale
+	f.mu.RUnlock()
+
 	var w float32
 	for _, r := range s {
-		g := f.GlyphFor(r)
-		w += g.Advance
+		w += f.GlyphFor(r).Advance
 	}
-	return w / f.scale
+	if sc <= 0 {
+		sc = 1
+	}
+	out := w / sc
+
+	f.mu.Lock()
+	if f.measure == nil || len(f.measure) >= measureCacheMax {
+		f.measure = make(map[string]float32, 256)
+	}
+	f.measure[s] = out
+	f.mu.Unlock()
+	return out
 }
 
 // MeasureRunes 仅测量部分。
@@ -537,6 +579,7 @@ func (f *Font) Close() {
 	f.face = nil
 	f.fallback = nil
 	f.cache = map[glyphKey]*Glyph{}
+	f.measure = nil
 	// 释放字形图集（4MB）：字体被缓存回收后不应继续占内存
 	f.Atlas = nil
 	f.AtlasDirty = false
@@ -573,6 +616,9 @@ var (
 
 // fontCandidates 返回候选字体文件与偏好的家族名片段。
 func fontCandidates(faceName string, weight int32) []string {
+	if p := platformFontCandidates(faceName, weight); len(p) > 0 {
+		return p
+	}
 	bold := weight >= 600
 	dir := os.Getenv("WINDIR")
 	if dir == "" {
@@ -633,31 +679,8 @@ func indexOf(s, sub string) int {
 	return -1
 }
 
-// mapFontFile 以内存映射方式读取字体文件。
-// 字体文件（如 msyh.ttc 约 20MB）用 os.ReadFile 读入会全部计入 Go 堆并长期常驻；
-// 映射后数据由系统页缓存支撑，按需调入、可回收，也不占 Go 堆。
-// 注意：返回的切片要在进程生命周期内保持有效（字体对象一直被缓存），故不解除映射。
-func mapFontFile(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || st.Size() <= 0 {
-		return os.ReadFile(path)
-	}
-	h, err := windows.CreateFileMapping(windows.Handle(f.Fd()), nil, windows.PAGE_READONLY, 0, 0, nil)
-	if err != nil || h == 0 {
-		return os.ReadFile(path)
-	}
-	defer windows.CloseHandle(h)
-	addr, err := windows.MapViewOfFile(h, windows.FILE_MAP_READ, 0, 0, 0)
-	if err != nil || addr == 0 {
-		return os.ReadFile(path)
-	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(addr)), int(st.Size())), nil
-}
+// mapFontFile 读取字体文件：桌面端走内存映射，浏览器端查已注册字体表。
+func mapFontFile(path string) ([]byte, error) { return platformMapFontFile(path) }
 
 // loadSystemFont 解析系统字体文件，优先返回文件名向量中的第一个可用字体。
 func loadSystemFont(faceName string, weight int32) (*sfnt.Font, error) {

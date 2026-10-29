@@ -1,3 +1,5 @@
+//go:build windows
+
 package win32
 
 import (
@@ -35,6 +37,10 @@ const (
 	// 系统拖动/缩放窗口开始与结束（WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE）
 	EvSizeMoveStart
 	EvSizeMoveEnd
+	// 文件拖入窗口（WM_DROPFILES），Event.Paths 为路径列表，X/Y 为松手落点
+	EvDropFiles
+	// 全局热键命中（WM_HOTKEY），Event.HotkeyID 为注册时给的 id
+	EvHotkey
 )
 
 // Event 传给上层的事件。
@@ -53,6 +59,10 @@ type Event struct {
 	// Text / Caret 用于 IME 组合串（EvComposition*）与多字符上屏。
 	Text  string
 	Caret int
+
+	// Paths 为拖入的文件/文件夹路径（EvDropFiles），HotkeyID 为全局热键 id（EvHotkey）。
+	Paths    []string
+	HotkeyID int
 }
 
 // Config 窗口配置。
@@ -67,6 +77,8 @@ type Config struct {
 	Transparent bool
 	// CornerRadius 窗口圆角半径（逻辑像素；0 = 不设置，>0 = 圆角）。
 	CornerRadius float32
+	// NoDrops 不接收文件拖入（默认接收，见 Window.SetAcceptDrops）。
+	NoDrops bool
 }
 
 // Window 一个原生窗口 + GL 上下文。
@@ -98,6 +110,10 @@ type Window struct {
 
 	// 窗口圆角（逻辑像素；0 = 未设置）
 	cornerRadius float32
+	// acceptDrops 当前是否接收文件拖入
+	acceptDrops bool
+	// topmost 当前是否置顶（SetAlwaysOnTop）
+	topmost bool
 	// roundedDWM / roundedRgn 记录当前生效的圆角实现，便于切换与取消
 	roundedDWM bool
 	roundedRgn bool
@@ -268,6 +284,8 @@ func NewWindow(cfg Config) (*Window, error) {
 	}
 	// 去掉 DWM 绘制的 1px 系统边框（无标题栏与带标题栏窗口都处理，见 hideSystemBorder）
 	w.hideSystemBorder()
+	// 文件拖入（WM_DROPFILES）：默认接收，可用 SetAcceptDrops(false) 关闭
+	w.SetAcceptDrops(!cfg.NoDrops)
 	w.running = true
 	// 初始圆角（需在 scale 就绪后应用，SetWindowRgn 按物理像素计算）
 	if cfg.CornerRadius > 0 {
@@ -405,6 +423,7 @@ func wndProc(hwnd, msg, wp, lp uintptr) uintptr {
 		delete(wndByHwnd, hwnd)
 		empty := len(wndByHwnd) == 0
 		mu.Unlock()
+		releaseHotkeys(hwnd)
 		if empty {
 			PostQuitMessage(0)
 		}
@@ -419,6 +438,22 @@ func wndProc(hwnd, msg, wp, lp uintptr) uintptr {
 			lw, lh := w.Size()
 			w.onEvent(Event{Type: EvResize, Width: lw, Height: lh, Scale: w.scale})
 		}
+		return 0
+
+	case WM_DROPFILES:
+		// 文件拖入：**HDROP 在 wParam 里**（lParam 恒为 0），里而是路径列表；
+		// 同时取出松手落点（客户区物理像素）。
+		ev := w.dropEvent(wp)
+		dbg("drop: hdrop=%#x paths=%d at %.0f,%.0f", wp, len(ev.Paths), ev.X, ev.Y)
+		if w.onEvent != nil {
+			w.onEvent(ev)
+		}
+		SetForegroundWindow(hwnd)
+		return 0
+
+	case WM_HOTKEY:
+		// 全局热键（RegisterHotKey 注册，见 system.go）
+		dispatchHotkey(hwnd, uint32(wp))
 		return 0
 
 	case WM_ENTERSIZEMOVE:
@@ -498,6 +533,23 @@ func wndProc(hwnd, msg, wp, lp uintptr) uintptr {
 		}
 		return DefWindowProcW(hwnd, msg, wp, lp)
 
+	case WM_NCPAINT:
+		// 无标题栏：客户区已铺满整窗，非客户区没有任何东西可画。
+		// 交给系统绘制就会在窗口四周留下 1px 边框线（首次激活时尤其明显）。
+		if !w.cfg.Decorated {
+			w.hideSystemBorder()
+			return 0
+		}
+		return DefWindowProcW(hwnd, msg, wp, lp)
+
+	case WM_NCUAHDRAWCAPTION, WM_NCUAHDRAWFRAME:
+		// 主题引擎通过这两条未公开消息绘制标题栏/框架（即使窗口没有标题栏）。
+		// 无标题栏窗口直接吞掉，避免激活瞬间在四周闪出一圈系统边框。
+		if !w.cfg.Decorated {
+			return 0
+		}
+		return DefWindowProcW(hwnd, msg, wp, lp)
+
 	case WM_SETFOCUS:
 		if w.onEvent != nil {
 			w.onEvent(Event{Type: EvFocusGained})
@@ -505,9 +557,17 @@ func wndProc(hwnd, msg, wp, lp uintptr) uintptr {
 		return 0
 
 	case WM_NCACTIVATE:
-		// 点击窗口取回焦点时，DWM 会按“活动窗口”重画非客户区与 1px 边框，
-		// 因此每次激活后都重新压掉边框（放在 DefWindowProc 之后才有效），
-		// 否则从别的窗口点回来会停一圈边框，直到下一次重绘/失焦。
+		// 自绘边框窗口：绝不把 WM_NCACTIVATE 交给 DefWindowProc，
+		// 否则系统会按“活动窗口”重画整个非客户区框架：从别的窗口点回来
+		// （首次获取焦点）时，窗口四周就冒出一圈系统边框，直到下一次重绘才消失。
+		// 客户区已铺满整窗，返回 TRUE 即可，无需系统绘制框架。
+		if !w.cfg.Decorated {
+			w.hideSystemBorder()
+			if w.onEvent != nil {
+				w.onEvent(Event{Type: EvNone})
+			}
+			return 1
+		}
 		r := DefWindowProcW(hwnd, msg, wp, lp)
 		w.hideSystemBorder()
 		// 同时重绘一帧：激活瞬间客户区可能残留 1px 旧像素/错位，整帧 glClear 后彻底干净

@@ -24,6 +24,8 @@ const (
 	KWebView
 	// KArrow 子菜单指示三角（矢量纹理绘制，不依赖字体字形）。
 	KArrow
+	// KChart 图表（折线 / 面积 / 柱状 / 饼 / 环形 / 雷达 / 散点）。
+	KChart
 )
 
 // Node 声明式节点（每帧重建，交互状态按 Key 继承）。
@@ -42,6 +44,8 @@ type Node struct {
 	Video   *Player
 	// WebView 内嵌浏览器状态（Kind == KWebView 时生效）。
 	WebView *WebView
+	// Chart 图表数据与缓存（Kind == KChart 时生效）。
+	Chart *Chart
 	OnClick func()
 	// OnClickAt 带点击坐标（相对节点左上角）的点击回调，滑块等需要。
 	OnClickAt func(x, y float32)
@@ -59,7 +63,10 @@ type Node struct {
 	// OnDragEnd 拖动结束（松手）时回调，对应 gio Clickable.Pressed() 由 true→false；
 	// 拖动类组件据此提交最终值，不必靠超时猜测松手。
 	OnDragEnd func()
-	Disabled  bool
+	// OnDrop 文件拖入回调：拖入落点命中本节点区域时触发，paths 为拖入的文件/文件夹路径。
+	// 与 OnClick 一样沿祖先冒泡，未设置 OnDrop 的子节点由最近的祖先接管。
+	OnDrop func(paths []string)
+	Disabled bool
 
 	// 运行时状态
 	Hover, Pressed, Focus bool
@@ -304,6 +311,9 @@ func (n *Node) DragEvt(fn func(x, y float32)) *Node { n.OnDrag = fn; return n }
 
 // DragEndEvt 拖动结束（松手）回调（需设置 Key 并配合 DragEvt）。
 func (n *Node) DragEndEvt(fn func()) *Node { n.OnDragEnd = fn; return n }
+
+// DropEvt 文件拖入回调（paths 为拖入的文件/文件夹路径，落点在本节点内时触发）。
+func (n *Node) DropEvt(fn func(paths []string)) *Node { n.OnDrop = fn; return n }
 
 // DisabledOn 禁用控件（不响应点击/拖动，外观由样式决定）。
 func (n *Node) DisabledOn(v bool) *Node { n.Disabled = v; return n }

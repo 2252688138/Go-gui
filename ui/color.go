@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"gogui/internal/gpu"
 )
@@ -23,7 +24,39 @@ func C(v any) gpu.Paint {
 	return gpu.Paint{R: 1, G: 0, B: 1, A: 1}
 }
 
+// colorCache 颜色字符串解析缓存。
+//
+// 主题 token 与组件写死的色值每帧会被解析几十上百次，旧实现每次都走
+// strings.TrimSpace / Split / strconv，rgb() 与 3 位 hex 分支还会分配切片。
+// 解析结果是字符串的纯函数，按原文缓存即可，不存在失效问题。
+type colorMemo struct {
+	sync.RWMutex
+	m map[string]gpu.Paint
+}
+
+var colorCache = &colorMemo{m: make(map[string]gpu.Paint, 64)}
+
+// colorCacheMax 缓存条数上限（超出整体丢弃，防止动态色值把缓存撑大）。
+const colorCacheMax = 512
+
 func parseColor(s string) gpu.Paint {
+	colorCache.RLock()
+	c, ok := colorCache.m[s]
+	colorCache.RUnlock()
+	if ok {
+		return c
+	}
+	c = parseColorSlow(s)
+	colorCache.Lock()
+	if len(colorCache.m) >= colorCacheMax {
+		colorCache.m = make(map[string]gpu.Paint, 64)
+	}
+	colorCache.m[s] = c
+	colorCache.Unlock()
+	return c
+}
+
+func parseColorSlow(s string) gpu.Paint {
 	s = strings.TrimSpace(s)
 	if s == "" || s == "none" || s == "transparent" {
 		return gpu.Paint{}

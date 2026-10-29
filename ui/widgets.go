@@ -494,6 +494,7 @@ func Skeleton(w, h float32) *Node {
 }
 
 // Toast 轻提示（悬浮于容器底部中央，需放在 Stack 中）。
+// 纯渲染组件：不自动隐藏。需要「显示 N 秒后自动隐藏」请用 ToastShow / ToastLayer。
 func Toast(msg string) *Node {
 	if msg == "" {
 		return nil

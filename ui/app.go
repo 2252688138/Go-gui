@@ -1,5 +1,3 @@
-//go:build windows
-
 package ui
 
 import (
@@ -15,7 +13,6 @@ import (
 	"gogui/internal/geom"
 	"gogui/internal/gpu"
 	"gogui/internal/text"
-	"gogui/internal/win32"
 )
 
 // Options 启动参数。
@@ -42,7 +39,7 @@ type Options struct {
 
 // App 一个窗口的应用实例（UI 线程独占）。
 type App struct {
-	win   *win32.Window
+	win   *platformWin
 	r     *gpu.Renderer
 	fonts *fontCache
 	opts  Options
@@ -90,6 +87,10 @@ type App struct {
 	textures *imageTextures
 	// 子菜单指示三角纹理（懒创建，随窗口销毁）
 	arrowTex *gpu.Texture
+	// 图表矢量层纹理（每张图表一张，总预算 chartTexBudget，按 LRU 淘汰）
+	chartList  []*chartCache
+	chartBytes int64
+	chartStamp int64
 	// 视频帧纹理缓存（每个播放器一份，随窗口销毁；按帧序号做 LRU 回收）
 	videos   map[*Player]*videoTexture
 	videoSeq int
@@ -99,14 +100,18 @@ type App struct {
 	wvRects  map[*WebView]geom.Rect
 	wvShown  map[*WebView]bool
 
-	// B 阶段：DirectComposition 合成（GL 输出走 DComp 表面，网页与自绘同层）
-	comp *win32.Compositor
-
 	// IME 组合串（当前窗口内的输入法预览）
 	imeText  string
 	imeCaret int
 	imeX,
 	imeY int32
+
+	// 文件拖入：WM_DROPFILES 的路径与落点，延迟到下一帧（节点树有效时）分发
+	dropPending  bool
+	dropPaths    []string
+	dropX, dropY float32
+	// onDrop 应用级拖入回调（没有节点设置 OnDrop 时兑底）
+	onDrop func(paths []string, x, y float32)
 
 	// 滚动：当前偏移（scrolls）与平滑滚动目标偏移（scrollTargets）
 	scrollTargets map[string]float32
@@ -185,26 +190,9 @@ func newApp(opts Options, view func() *Node) (*App, error) {
 		bgAny = "#0b0f19"
 	}
 
-	win, err := win32.NewWindow(win32.Config{
-		Title:        opts.Title,
-		Width:        opts.Width,
-		Height:       opts.Height,
-		Resizable:    true,
-		Decorated:    !opts.NoTitleBar,
-		Transparent:  false,
-		CornerRadius: opts.CornerRadius,
-	})
+	win, err := newPlatformWindow(opts)
 	if err != nil {
 		return nil, err
-	}
-
-	// 窗口/任务栏图标：默认用内置品牌图标，Options.Icon 可覆盖
-	{
-		ico := opts.Icon
-		if len(ico) == 0 {
-			ico = defaultIcon
-		}
-		_ = win.SetIcon(ico)
 	}
 
 	a := &App{
@@ -234,13 +222,7 @@ func newApp(opts Options, view func() *Node) (*App, error) {
 
 	// B 阶段（可选）：把呈现切到 DirectComposition，网页与自绘内容同层合成。
 	// 环境变量 GOGUI_COMPOSE=0 可强制回退 A 阶段（子窗口叠加）。
-	if win32.ComposeSupported() {
-		if comp, cerr := win32.NewCompositor(win.Hwnd, pw, ph); cerr == nil {
-			a.comp = comp
-		} else {
-			win32.Debugf("DComp 合成不可用，回退 A 阶段: %v", cerr)
-		}
-	}
+	win.AttachCompose(pw, ph)
 	a.fonts = newFontCache(opts.FontFamily, scale)
 	// 字体被 LRU 回收时同步释放图集纹理，否则显存只增不减
 	a.fonts.onEvict = func(f *text.Font) { r.ReleaseFont(f) }
@@ -256,16 +238,20 @@ func newApp(opts Options, view func() *Node) (*App, error) {
 // runLoop 统一消息泵与多窗口渲染循环。
 func runLoop() error {
 	last := time.Now()
+	// 复用窗口列表切片：旧实现每轮循环（即使完全空闲，约 8ms 一次）都用 snapshotApps()
+	// 复制一份，持续产生垃圾；这里改成原地复用，容量不足时才扩容。
+	list := make([]*App, 0, 4)
 	for {
-		if !win32.PollMessages() {
+		if !pollMessages() {
 			break
 		}
-		list := snapshotApps()
+		list = appsInto(list[:0])
 		if len(list) == 0 {
 			break
 		}
 		// 上一帧存在动画时本帧继续重绘所有窗口
 		needAnim := animBusy.Swap(false)
+		painted := false
 		for _, a := range list {
 			if a == nil {
 				continue
@@ -306,12 +292,18 @@ func runLoop() error {
 			if a.dirty || a.redrawRequest.Swap(false) || needAnim || a.hoverProbe {
 				forced := a.dirty || needAnim || a.hoverProbe
 				a.dirty = false
+				painted = true
 				a.frame(forced)
 			}
 			a.runPending()
 		}
-		el := time.Since(last)
+		// 自适应休眠：有绘制/动画时维持 120Hz 节奏；整轮没有任何窗口可画时降到 60Hz，
+		// 空闲窗口不再以约 125 次/秒的频率空转 PeekMessage + time.Now（降低常驻 CPU）。
 		want := time.Second / 120
+		if !painted && !needAnim {
+			want = time.Second / 60
+		}
+		el := time.Since(last)
 		if el < want {
 			time.Sleep(want - el)
 		}
@@ -327,43 +319,43 @@ func runLoop() error {
 	return nil
 }
 
-func (a *App) handleEvent(ev win32.Event) {
+func (a *App) handleEvent(ev Event) {
 	currentApp.Store(a)
 	switch ev.Type {
-	case win32.EvClose:
+	case EvClose:
 		if a.onClose != nil && !a.onClose() {
 			return
 		}
 		a.running = false
 		a.closed = true
 		unregisterApp(a)
-	case win32.EvResize:
+	case EvResize:
 		a.win.MakeCurrent()
 		// 尺寸变化：重建渲染目标（含超采样）、字形缓存与合成表面
 		a.applyRenderScale()
-	case win32.EvSizeMoveStart:
+	case EvSizeMoveStart:
 		// 开始拖动/缩放窗口：隐藏滚动条与悬停高亮
 		a.sizeMoving = true
 		a.scrollHoverKey = ""
 		a.dirty = true
-	case win32.EvSizeMoveEnd:
+	case EvSizeMoveEnd:
 		a.sizeMoving = false
 		a.dirty = true
-	case win32.EvMouseMove:
+	case EvMouseMove:
 		a.mouseX, a.mouseY = ev.X/uiScale, ev.Y/uiScale
 		a.mouseIn = true
 		// 不直接全帧重绘：先在下一帧算 hover 命中，
 		// 只有悬停目标/滚动条悬停真的变化时才重新绘制。
 		a.hoverProbe = true
-	case win32.EvMouseLeave:
+	case EvMouseLeave:
 		a.mouseIn = false
 		a.dirty = true
-	case win32.EvMouseDown:
+	case EvMouseDown:
 		a.mouseX, a.mouseY = ev.X/uiScale, ev.Y/uiScale
 		a.pressX, a.pressY = a.mouseX, a.mouseY
 		a.pressed = true
 		a.dirty = true
-	case win32.EvMouseUp:
+	case EvMouseUp:
 		a.mouseX, a.mouseY = ev.X/uiScale, ev.Y/uiScale
 		if a.pressed && a.scrollDragKey == "" {
 			// 命中与回调节奏放在下一帧，基于最新的组件树
@@ -374,22 +366,22 @@ func (a *App) handleEvent(ev win32.Event) {
 		a.scrollDragKey = ""
 		a.pressFired = nil
 		a.dirty = true
-	case win32.EvMouseWheel:
+	case EvMouseWheel:
 		a.handleWheel(ev.X/uiScale, ev.Y/uiScale, ev.DY)
 		a.scrollIdle = 0
 		a.dirty = true
-	case win32.EvKeyDown:
+	case EvKeyDown:
 		// 菜单展开时 ESC 只关闭菜单
-		if ev.Key == win32.VK_ESCAPE && closeOpenMenus() {
+		if ev.Key == VK_ESCAPE && closeOpenMenus() {
 			a.dirty = true
 			return
 		}
 		// 全屏时 ESC 先退出全屏；再有焦点时不直接关窗口（避免输入时误关）
-		if ev.Key == win32.VK_ESCAPE && a.win.IsFullscreen() {
+		if ev.Key == VK_ESCAPE && a.win.IsFullscreen() {
 			a.SetFullscreen(false)
 			return
 		}
-		if ev.Key == win32.VK_ESCAPE && a.focusKey == "" {
+		if ev.Key == VK_ESCAPE && a.focusKey == "" {
 			a.running = false
 		}
 		if n := a.focusedNode(); n != nil && n.OnKey != nil {
@@ -400,7 +392,7 @@ func (a *App) handleEvent(ev win32.Event) {
 			a.onKey(ev.Key)
 			a.dirty = true
 		}
-	case win32.EvChar:
+	case EvChar:
 		a.imeText, a.imeCaret = "", 0
 		if n := a.focusedNode(); n != nil && n.OnChar != nil {
 			n.OnChar(ev.Char)
@@ -410,14 +402,23 @@ func (a *App) handleEvent(ev win32.Event) {
 			a.onChar(ev.Char)
 			a.dirty = true
 		}
-	case win32.EvCompositionStart:
+	case EvCompositionStart:
 		a.imeText, a.imeCaret = "", 0
 		a.dirty = true
-	case win32.EvComposition:
+	case EvComposition:
 		a.imeText, a.imeCaret = ev.Text, ev.Caret
 		a.dirty = true
-	case win32.EvCompositionEnd:
+	case EvCompositionEnd:
 		a.imeText, a.imeCaret = "", 0
+		a.dirty = true
+	case EvDropFiles:
+		// 文件拖入：节点树每帧重建，回调必须等到 frame() 里指针有效时再分发
+		if len(ev.Paths) == 0 {
+			return
+		}
+		a.dropPending = true
+		a.dropPaths = ev.Paths
+		a.dropX, a.dropY = ev.X/uiScale, ev.Y/uiScale
 		a.dirty = true
 	default:
 		a.dirty = true
@@ -454,20 +455,8 @@ func (a *App) frame(forced bool) {
 	a.r.Resize(pw, ph, es)
 	w, h := float32(pw)/es, float32(ph)/es
 
-	// B 阶段：先拿离屏目标再让渲染器画进去；A 阶段用窗口默认帧缓冲。
-	// 合成表面尺寸固定为物理像素，超采样只作用于中间渲染目标。
+	// composeFBO 在真正开始绘制前才赋值（见下），提前声明以便「无树」分支安全返回
 	var composeFBO uint32
-	if a.comp != nil {
-		if f, _, _, cerr := a.comp.BeginFrame(); cerr == nil {
-			composeFBO = f
-			a.r.SetTarget(f, pw, ph)
-		} else {
-			a.r.SetTarget(0, pw, ph)
-		}
-	} else {
-		a.r.SetTarget(0, pw, ph)
-	}
-
 	root := a.view()
 	if root == nil {
 		return
@@ -565,6 +554,19 @@ func (a *App) frame(forced bool) {
 		}
 	}
 
+	// 文件拖入：落点命中的节点优先（OnDrop），否则给应用级回调
+	if a.dropPending {
+		a.dropPending = false
+		paths := a.dropPaths
+		a.dropPaths = nil
+		if n := hitDropTarget(root, a.dropX, a.dropY, 0, a); n != nil && n.OnDrop != nil {
+			n.OnDrop(paths)
+		} else if a.onDrop != nil {
+			a.onDrop(paths, a.dropX, a.dropY)
+		}
+		a.dirty = true
+	}
+
 	// 纯指针移动且悬停目标/滚动条状态未变：跳过重绘。
 	// 鼠标在空白区域移动、或悬停在同一控件上时无需重画整帧，
 	// 毛玻璃/大列表页面的流畅度提升很明显。
@@ -573,13 +575,28 @@ func (a *App) frame(forced bool) {
 		return
 	}
 
+	// B 阶段：先拿离屏目标再让渲染器画进去；A 阶段用窗口默认帧缓冲。
+	// 合成表面尺寸固定为物理像素，超采样只作用于中间渲染目标。
+	//
+	// 注意：BeginFrame 必须在确认「本帧确实要绘制」之后调用。
+	// 旧实现放在函数开头，遇到上面的悬停探测提前返回时不会执行 EndFrame，
+	// DComp 会停在一个未提交的帧上（表现为偶发卡顿 / 画面不刷新）。
+	if f := a.win.ComposeBegin(); f != 0 {
+		composeFBO = f
+		a.r.SetTarget(f, pw, ph)
+	} else {
+		a.r.SetTarget(0, pw, ph)
+	}
+
 	a.r.Begin(a.bg)
 	a.clipN, a.clipSkip = 0, 0
 	a.animating = false
-	// 每帧重新收集 WebView 矩形：没画到的（滚出视口 / 切页）会在同步时被隐藏
-	for k := range a.wvRects {
-		delete(a.wvRects, k)
+	// 收集 WebView 矩形前先重置图片限流标记（否则滚出视口的图片会让 waiting 永久为 1）
+	if a.textures != nil {
+		a.textures.beginFrame()
 	}
+	// 每帧重新收集 WebView 矩形：没画到的（滚出视口 / 切页）会在同步时被隐藏
+	clear(a.wvRects)
 	a.paint(root, 0)
 	a.r.End()
 	// 超高清：把超采样离屏结果降采样写回呈现目标（未开启时为空操作）
@@ -587,7 +604,7 @@ func (a *App) frame(forced bool) {
 	// 网页是独立的子窗口：布局确定后立即同步位置/显隐（紧贴 Swap，避免拖影）
 	a.syncWebViews()
 	if composeFBO != 0 {
-		a.comp.EndFrame()
+		a.win.ComposeEnd()
 	} else {
 		a.win.Swap()
 	}
@@ -689,6 +706,8 @@ func (a *App) paint(n *Node, sy float32) {
 		a.paintWebView(n, r, st)
 	case KArrow:
 		a.paintArrow(r, st.Color)
+	case KChart:
+		a.paintChart(n, r)
 	}
 
 	childSy := sy
@@ -885,12 +904,26 @@ func (a *App) applyScrollbarDrag(key string) {
 	}
 }
 
-// walkScrollbars 遍历可见滚动容器的滚动条几何（视口外容器直接剪枝）。
+// walkScrollbars 遍历可见滚动容器的滚动条几何（视口外子树直接剪枝）。
 func walkScrollbars(n *Node, sy float32, a *App, fn func(*Node, geom.Rect)) {
+	if n == nil || a == nil {
+		return
+	}
+	walkScrollbarsIn(n, sy, a, n.Frame, fn)
+}
+
+// walkScrollbarsIn 带可见矩形的滚动条遍历。
+// 每帧调用一次，长列表/多页文档里屏幕外的整棵子树不必再走一遍
+// （旧实现无条件递归全部节点，命中测试之外的额外 O(节点数) 开销）。
+func walkScrollbarsIn(n *Node, sy float32, a *App, vis geom.Rect, fn func(*Node, geom.Rect)) {
 	if n == nil || n.Style.Opacity <= 0 || n.Disabled {
 		return
 	}
 	r := n.Frame.Offset(0, sy)
+	if !n.Style.PosAbs && vis.W > 0 && vis.H > 0 &&
+		(r.Bottom() < vis.Y || r.Y > vis.Bottom() || r.Right() < vis.X || r.X > vis.Right()) {
+		return
+	}
 	if n.Kind == KScroll {
 		if _, _, ok := scrollbarMetrics(n, r); ok {
 			fn(n, r)
@@ -898,10 +931,17 @@ func walkScrollbars(n *Node, sy float32, a *App, fn func(*Node, geom.Rect)) {
 	}
 	for _, c := range n.Children {
 		childSy := sy
+		childVis := vis
 		if n.Kind == KScroll {
 			childSy = sy - a.scrolls[n.Key]
+			// 滚动内容只在自身视口内可见
+			inner := r.Intersect(vis)
+			if inner.W <= 0 || inner.H <= 0 {
+				inner = r
+			}
+			childVis = inner
 		}
-		walkScrollbars(c, childSy, a, fn)
+		walkScrollbarsIn(c, childSy, a, childVis, fn)
 	}
 }
 
@@ -1006,49 +1046,58 @@ func (a *App) paintText(n *Node, r geom.Rect, st *Style) {
 	if lh <= 0 {
 		lh = f.LineHeight
 	}
+	flh := f.LineHeight
 
 	tx := r.X + st.Pad.Left
-
-	var lines []string
-	if st.Wrap && n.wrapW > 0 {
-		// 与布局测量共用同一折行算法与宽度，行数严格一致
-		lines = wrapTextLines(f, n.Text, n.wrapW)
-	} else {
-		lines = splitLines(n.Text)
+	// 与布局测量共用同一折行算法与缓存，行数严格一致
+	wrap := st.Wrap && n.wrapW > 0
+	var wlines []string
+	if wrap {
+		wlines = wrapLinesCached(f, n.Text, n.wrapW)
 	}
-	totalH := float32(len(lines)) * lh
 
 	// 垂直定位：按钮等在垂直居中类节点上按整体高度居中，避开 padding 挤压；
-	// 普通文本仍从顶部开始排版。
+	// 普通文本仍从顶部开始排版（此时无需先数行数，省一次遍历）。
 	y := r.Y + st.Pad.Top
 	if st.CenterY || n.Kind == KButton {
+		lines := lineCount(n.Text)
+		if wrap {
+			lines = len(wlines)
+		}
+		totalH := float32(lines) * lh
 		y = r.Y + (r.H-totalH)/2
 		if y < r.Y {
 			y = r.Y
 		}
 	}
 
-	for _, ln := range lines {
-		lw := f.Measure(ln)
+	draw := func(ln string) {
 		x := tx
-		switch st.TextAlign {
-		case AlignCenter:
-			x = r.X + (r.W-lw)/2
-		case AlignEnd:
-			x = r.Right() - lw - st.Pad.Right
-		}
-		if n.Kind == KButton {
+		switch {
+		case n.Kind == KButton:
 			// 按钮内文字水平居中
-			x = r.X + (r.W-lw)/2
+			x = r.X + (r.W-f.Measure(ln))/2
+		case st.TextAlign == AlignCenter:
+			x = r.X + (r.W-f.Measure(ln))/2
+		case st.TextAlign == AlignEnd:
+			x = r.Right() - f.Measure(ln) - st.Pad.Right
 		}
 
 		// 行内微调：行高大于字体行高时居中，小于时不能为负（否则顶部被裁）
 		vy := y
-		if lh > f.LineHeight {
-			vy = y + (lh-f.LineHeight)/2
+		if lh > flh {
+			vy = y + (lh-flh)/2
 		}
 		a.r.TextRun(gpu.TextRun{X: x, Y: vy, Text: ln, Font: f, Color: st.Color})
 		y += lh
+	}
+	// 逐行直接绘制：不再为每个文本节点每帧分配行切片
+	if wrap {
+		for _, ln := range wlines {
+			draw(ln)
+		}
+	} else {
+		forEachLine(n.Text, draw)
 	}
 }
 
@@ -1076,6 +1125,18 @@ func hitInteractive(root *Node, x, y, sy float32, a *App) *Node {
 	n := hitTest(root, x, y, sy, a)
 	for c := n; c != nil; c = c.Parent {
 		if c.OnClick != nil || c.OnPress != nil || c.OnClickAt != nil || c.OnDrag != nil {
+			return c
+		}
+	}
+	return n
+}
+
+// hitDropTarget 返回落点下最近的「接收拖入」节点（自身或祖先）。
+// 拖入没有悬停态（WM_DROPFILES 只在松手时到达），所以只在落下那一刻命中。
+func hitDropTarget(root *Node, x, y, sy float32, a *App) *Node {
+	n := hitTest(root, x, y, sy, a)
+	for c := n; c != nil; c = c.Parent {
+		if c.OnDrop != nil {
 			return c
 		}
 	}
@@ -1454,6 +1515,15 @@ func snapshotApps() []*App {
 	return out
 }
 
+// appsInto 把当前窗口列表追加到 dst 上（调用方传 dst[:0] 原位复用），
+// 供渲染主循环使用：避免每轮循环都分配一次窗口列表切片。
+func appsInto(dst []*App) []*App {
+	appsMu.Lock()
+	dst = append(dst, apps...)
+	appsMu.Unlock()
+	return dst
+}
+
 // WindowCount 返回当前存活窗口数。
 func WindowCount() int {
 	return len(snapshotApps())
@@ -1461,6 +1531,29 @@ func WindowCount() int {
 
 // SetOnKey 设置全局按键回调（任意节点聚焦时都会收到，用于 ESC 等全局快捷键）。
 func (a *App) SetOnKey(fn func(uint32)) { a.onKey = fn }
+
+// SetOnDropFiles 设置本窗口的文件拖入回调（拖到没有 OnDrop 的区域时触发）。
+func (a *App) SetOnDropFiles(fn func(paths []string, x, y float32)) { a.onDrop = fn }
+
+// SetAcceptDrops 开启/关闭窗口接收文件拖入（默认开启）。
+func (a *App) SetAcceptDrops(on bool) { a.win.SetAcceptDrops(on) }
+
+// AcceptDrops 当前窗口是否接收文件拖入。
+func (a *App) AcceptDrops() bool { return a.win.AcceptDrops() }
+
+// SetAlwaysOnTop 窗口置顶 / 取消置顶。
+func (a *App) SetAlwaysOnTop(on bool) { a.win.SetAlwaysOnTop(on); a.dirty = true }
+
+// IsAlwaysOnTop 当前窗口是否置顶。
+func (a *App) IsAlwaysOnTop() bool { return a.win.AlwaysOnTop() }
+
+// RegisterHotkey 注册系统级热键（窗口失焦/最小化同样触发），返回 id（0 = 失败）。
+func (a *App) RegisterHotkey(mods uint32, vk uint32, fn func()) int32 {
+	return a.win.RegisterHotKey(mods, vk, fn)
+}
+
+// UnregisterHotkey 注销热键。
+func (a *App) UnregisterHotkey(id int32) { a.win.UnregisterHotkey(id) }
 
 // OnKeyGlobal 给当前活跃窗口设置全局按键回调（无窗口时忽略）。
 func OnKeyGlobal(fn func(uint32)) {
@@ -1589,10 +1682,10 @@ func (a *App) dispose() {
 	// 先关网页（WebView2 要求在同一条 UI 线程上释放），再拆 GL 与窗口
 	a.closeWebViews()
 	a.win.MakeCurrent()
-	if a.comp != nil {
-		a.comp.Close()
-		a.comp = nil
-	}
+	a.chartResetCache()
+	a.chartResetCache()
+	// Markdown 渲染树缓存按窗口区分，关窗时一并释放，避免常驻节点树
+	mdDropTreeCache(a)
 	if a.r != nil {
 		a.r.Destroy()
 	}
