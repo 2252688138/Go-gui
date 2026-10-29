@@ -1,14 +1,30 @@
 # 构建产物（不要提交）
 /bin/
 /dist/
+dist/
 web/dist/
 web/build.log
 *.exe
 *.upx
 rsrc_windows_*.syso.bak
 
-# 调试 / 临时输出
+# 本地工作目录（不推送）
 .zym/
+.workflow/
+.trae/
+.claude/
+.idea/
+.vscode/
+
+# 私密信息（密钥 / 命令记录）
+命令.text
+*.text
+.env
+.env.*
+*.pem
+*.key
+
+# 调试 / 临时输出
 *.log
 d_v6.txt
 dump.txt
@@ -27,8 +43,6 @@ mem.prof
 coverage.txt
 
 # 编辑器 / IDE
-.idea/
-.vscode/
 *.swp
 *.swo
 *.suo
@@ -40,6 +54,6 @@ Desktop.ini
 .DS_Store
 
 # 注意：以下文件必须提交（勿加入忽略）
-#   WebView2Loader.dll     通过 //go:embed 打进二进制
+#   internal/win32/webview2loader/WebView2Loader.dll  通过 //go:embed 打进二进制
 #   ui/assets/icon.ico     应用图标
 #   cmd/*/rsrc_windows_*.syso  exe 图标资源
