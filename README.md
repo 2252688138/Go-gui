@@ -172,19 +172,57 @@ version.Full()     // v0.1.0 · release · 1a2b3c4 · 2026-10-29T03:49:04Z
 ## 安装器（NSIS 3）
 
 ```powershell
-./build.ps1 -Installer                  # -> dist\GoGUI-0.1.0-setup.exe
-./build.ps1 -Installer -Upx             # 与 UPX 压缩一起用
-./build.ps1 -Installer -Channel release # 正式通道
+./build.ps1 -Installer                   # -> dist\GoGUI-0.1.0-setup.exe
+./build.ps1 -Installer -Upx              # 先 UPX 压 exe，再打包
+./build.ps1 -Installer -Channel release  # 正式通道（exe 属性与安装包注释同步标注）
+./build.ps1 -Bump patch -Installer       # 版本号 +1 后打包
 ```
 
-- 需要 NSIS 3（`makensis`）：装在 `C:\Program Files (x86)\NSIS\` 会自动发现，也可用环境变量 `NSIS_EXE` 指定路径；
-- 向导第一步选择安装范围：
-  - **仅为我安装** → `%LOCALAPPDATA%\Programs\GoGUI`，注册表写 HKCU，**不需要管理员**；
-  - **为所有用户安装** → `%ProgramFiles%\GoGUI`，注册表写 HKLM，未提权时自动以 UAC 重新启动自身；
-- 目录页可自定义安装目录，自定义路径会被完整保留（两种范围互不覆盖，并各自记住上次的选择）；
-- 静默安装：`GoGUI-0.1.0-setup.exe /S /currentuser /D=D:\Apps\GoGUI`（`/D` 必须是最后一个参数、路径不加引号）；`/allusers` 同理；
-- 安装包文件名、exe 文件属性、卸载列表里的 `DisplayVersion` 全部来自 `VERSION.txt`；
-- 卸载会清理安装目录、开始菜单与桌面快捷方式、注册表（含另一种范围的残留）。
+前置条件：NSIS 3（`makensis.exe`）。装在 `C:\Program Files (x86)\NSIS\` 或 `C:\Program Files\NSIS\` 会被自动发现，否则用环境变量 `NSIS_EXE` 指定路径。
+
+### 安装范围（向导第一步）
+
+| 选项 | 安装目录 | 注册表 | 权限 |
+| --- | --- | --- | --- |
+| 仅为我安装（默认） | `%LOCALAPPDATA%\Programs\GoGUI` | HKCU | 无需管理员 |
+| 为所有用户安装 | `%ProgramFiles%\GoGUI` | HKLM | 未提权时自动 UAC 重入 |
+
+- 已提权运行时默认选中「所有用户」，普通双击默认「仅为我」；
+- 目录页可自由修改安装目录，**自定义路径会被完整保留**：切换范围只在两个默认目录之间切换，不会覆盖手选路径；两种范围各自记住上次安装的目录。
+
+### 静默安装 / 卸载
+
+```powershell
+# 安装（/D 必须是最后一个参数，路径不加引号）
+GoGUI-0.1.0-setup.exe /S /currentuser /D=D:\Apps\GoGUI
+GoGUI-0.1.0-setup.exe /S /allusers              # 需已提权，否则返回码 5
+
+# 卸载
+"%LOCALAPPDATA%\Programs\GoGUI\uninstall.exe" /S
+```
+
+`/currentuser`、`/allusers` 会跳过安装范围选择页，适合脚本与 CI。
+
+### 安装了什么
+
+| 位置 | 内容 |
+| --- | --- |
+| `$INSTDIR` | `gallery.exe`、`uninstall.exe` |
+| 开始菜单 | 「GoGUI」程序快捷方式 + 卸载项 |
+| 桌面 | GoGUI 快捷方式 |
+| 注册表 | `…\Uninstall\GoGUI`：DisplayName / DisplayVersion / DisplayIcon / Publisher / InstallLocation / EstimatedSize / NoModify / NoRepair |
+| 注册表 | `Software\GoGUI`：InstallDir / Version / Channel / Scope |
+
+- 安装包文件名、exe 文件属性、卸载列表里的 `DisplayVersion` 全部来自 `VERSION.txt`，不需要手工同步；
+- 升级 = 用新版本安装器覆盖安装（同范围同目录），旧文件被替换、注册表版本号更新；
+- 卸载先 `taskkill` 残留进程，再清理安装目录、开始菜单与桌面快捷方式、注册表（含另一种范围的残留项）。
+
+### 改脚本时注意（踩过的坑）
+
+- `installer/gogui.nsi` 含中文，**必须保存为 UTF-8 带 BOM**，否则 makensis 报 `Bad text encoding`；
+- 安装 `Section` 内不要再给 `$INSTDIR` 赋值（会覆盖目录页手选的路径），范围切换只调 `SetScope`；
+- 不要用 `InstallDirRegKey`：它在 `.onInit` 之前就把旧目录塞进 `$INSTDIR`，会让「所有用户」误用当前用户的旧路径；
+- 一个 exe 只能有一个 `.rsrc` 节，图标与版本信息必须由同一个 `tools/winres` 产物提供。
 
 ## exe 图标与文件属性（tools/winres）
 

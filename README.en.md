@@ -132,6 +132,90 @@ Measured (gallery, go1.26 windows/amd64):
 | `build.ps1` | **4.54 MB** | −30% |
 | `build.ps1 -Upx` | **1.52 MB** | −76%, self-extracting at startup |
 
+## Versioning
+
+The only source of truth is `VERSION.txt` at the repo root (semver `x.y.z`).
+
+```powershell
+./build.ps1 -Bump patch        # 0.1.0 -> 0.1.1 (written back to VERSION.txt)
+./build.ps1 -Bump minor        # 0.1.0 -> 0.2.0
+./build.ps1 -Bump major        # 0.1.0 -> 1.0.0
+./build.ps1 -Channel release   # mark the build as release (default: dev)
+```
+
+One build injects the version into three places:
+
+| Where | How | Read it |
+| --- | --- | --- |
+| Runtime | `-ldflags -X gogui/internal/version.Number=...` | `version.String()` / `version.Full()` |
+| exe file properties | `tools/winres` generates `cmd/gallery/rsrc_windows_*.syso` | right-click → Properties → Details |
+| Installer | `makensis /DVERSION=... /DVI_VERSION=...` | "Apps & features" entry and setup file name |
+
+```go
+import "gogui/internal/version"
+
+version.String()   // v0.1.0
+version.Title()    // GoGUI v0.1.0 (used as the gallery window title)
+version.Full()     // v0.1.0 · release · 1a2b3c4 · 2026-10-29T03:49:04Z
+```
+
+`internal/version` also ships the commit hash, build time, release channel, and semver helpers (`version.Parse` / `version.Compare`).
+
+## Installer (NSIS 3)
+
+```powershell
+./build.ps1 -Installer                   # -> dist\GoGUI-0.1.0-setup.exe
+./build.ps1 -Installer -Upx              # UPX the exe first, then package
+./build.ps1 -Installer -Channel release  # release channel
+./build.ps1 -Bump patch -Installer       # bump version, then package
+```
+
+Requires NSIS 3 (`makensis.exe`). It is auto-detected in `C:\Program Files (x86)\NSIS\` and `C:\Program Files\NSIS\`; otherwise point `NSIS_EXE` at it.
+
+### Install scope (first wizard page)
+
+| Option | Install dir | Registry | Privileges |
+| --- | --- | --- | --- |
+| Just me (default) | `%LOCALAPPDATA%\Programs\GoGUI` | HKCU | none |
+| All users | `%ProgramFiles%\GoGUI` | HKLM | relaunches itself elevated (UAC) |
+
+- An elevated process defaults to "all users", a plain double-click to "just me";
+- the directory page accepts any custom path and **it is kept as-is**: switching scope only moves between the two default directories and never overwrites a hand-picked path; each scope remembers its own last directory.
+
+### Silent install / uninstall
+
+```powershell
+# install (/D must be the last argument, path must not be quoted)
+GoGUI-0.1.0-setup.exe /S /currentuser /D=D:\Apps\GoGUI
+GoGUI-0.1.0-setup.exe /S /allusers              # requires elevation, exit code 5 otherwise
+
+# uninstall
+"%LOCALAPPDATA%\Programs\GoGUI\uninstall.exe" /S
+```
+
+`/currentuser` and `/allusers` skip the scope page, which is handy for scripts and CI.
+
+### What gets installed
+
+| Location | Content |
+| --- | --- |
+| `$INSTDIR` | `gallery.exe`, `uninstall.exe` |
+| Start menu | `GoGUI` shortcut + uninstall entry |
+| Desktop | `GoGUI` shortcut |
+| Registry | `…\Uninstall\GoGUI`: DisplayName / DisplayVersion / DisplayIcon / Publisher / InstallLocation / EstimatedSize / NoModify / NoRepair |
+| Registry | `Software\GoGUI`: InstallDir / Version / Channel / Scope |
+
+- Setup file name, exe properties and `DisplayVersion` all come from `VERSION.txt` — nothing to sync by hand;
+- upgrading means running the newer installer over the same scope and directory; old files are replaced and the registered version is updated;
+- uninstall kills leftover processes first, then removes the install directory, shortcuts and registry keys (including leftovers from the other scope).
+
+### Pitfalls when editing the script
+
+- `installer/gogui.nsi` contains Chinese text and **must be saved as UTF-8 with BOM**, otherwise makensis fails with `Bad text encoding`;
+- never assign `$INSTDIR` inside the install `Section` — it would override the path picked on the directory page; switching scope only calls `SetScope`;
+- do not use `InstallDirRegKey`: it stuffs the old directory into `$INSTDIR` before `.onInit`, so an "all users" install would silently reuse the per-user path;
+- an exe can only contain one `.rsrc` section, so icons and version info must come from the same `tools/winres` output.
+
 ## State and interaction
 
 The component tree is a **pure function rebuilt every frame**. Interaction state lives in your own package-level variables; call `ui.RequestRedraw()` after mutating them (thread-safe):
