@@ -1,4 +1,4 @@
-# GoGUI
+﻿# GoGUI
 
 A pure-Go, **zero-cgo** declarative GUI toolkit that draws its whole interface with OpenGL — no WebView needed for the UI itself (an optional embedded WebView2 component is available). The visual language follows modern web UI: dark surfaces, rounded corners, gradients, shadows, flex layout, and a fully customizable style DSL.
 
@@ -16,6 +16,37 @@ A pure-Go, **zero-cgo** declarative GUI toolkit that draws its whole interface w
 │  internal/win32             Win32/WGL bindings│
 └──────────────────────────────────────────────┘
 ```
+
+## Screenshots
+
+Real running screenshots (1180×760, dark theme). Image files live in [`ui/assets/`](ui/assets).
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/登录页.png" alt="Login"><br><sub><b>Login</b> · validation / focus states / remember me</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/仪表盘.png" alt="Dashboard"><br><sub><b>Dashboard</b> · KPI cards / progress / activity list</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/表格.png" alt="Data table"><br><sub><b>Data table</b> · zebra rows / status tags / inline progress / row click</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/表单.png" alt="Form and dialogs"><br><sub><b>Form &amp; dialogs</b> · select / textarea / number / date / 4 dialog kinds / drawer</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/图表组件.png" alt="Charts"><br><sub><b>Charts</b> · line / area / bar / pie / donut / radar / scatter</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/markdown渲染.png" alt="Markdown"><br><sub><b>Markdown</b> · syntax highlight / tables / math / Mermaid</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/webview组件.png" alt="Embedded browser"><br><sub><b>Embedded browser</b> · system WebView2 page + self-drawn toolbar</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/视频播放器.png" alt="Video player"><br><sub><b>Video player</b> · mp4/mkv/mov/avi/webm/flv/ts/m3u8 + custom controls</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/音乐播放器.png" alt="Music player"><br><sub><b>Music player</b> · cover art / spectrum / seek / playlist</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/系统操作.png" alt="System features"><br><sub><b>System features</b> · images / drag-drop / backdrop blur / emoji / IME</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/浅色主题.png" alt="Light theme"><br><sub><b>Light theme</b> · one call to <code>ui.UseTheme(ui.ThemeLight)</code> re-skins widgets and charts</sub></td>
+    <td width="50%" valign="top"><i>Everything above is drawn by OpenGL — no HTML, no CSS, no WebView involved in the main rendering path.<br>Run <code>go run ./cmd/gallery</code> to click through every page.</i></td>
+  </tr>
+</table>
 
 ## Why it looks like the web without a browser
 

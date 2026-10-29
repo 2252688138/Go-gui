@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"gogui/internal/version"
 	"gogui/ui"
 )
 
@@ -90,7 +91,7 @@ type chatMsg struct {
 
 func main() {
 	opts := ui.Options{
-		Title:      "GoGUI 组件演示",
+		Title:      "GoGUI 组件演示 " + version.String(),
 		Width:      1180,
 		Height:     760,
 		NoTitleBar: true,
@@ -334,7 +335,7 @@ func titleMenus() []ui.MenuDef {
 				{Label: "MenuBar / MenuLayer", OnPick: func() { switchCase("controls") }},
 				{Label: "MenuItem.Children 嵌套", OnPick: func() { toastShow("Children 非空即为子菜单，可多层嵌套") }},
 			}},
-			{Label: "关于 GoGUI", OnPick: func() { toastShow("GoGUI · 自绘标题栏与多级菜单示例") }},
+			{Label: "关于 GoGUI", OnPick: func() { toastShow(version.Full() + " · 自绘标题栏与多级菜单示例") }},
 		}},
 	}
 }

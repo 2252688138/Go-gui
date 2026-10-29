@@ -1,4 +1,4 @@
-# GoGUI
+﻿# GoGUI
 
 纯 Go、零 cgo 的跨平台自绘 GUI 框架。界面主体全部由 OpenGL 自绘（不依赖 WebView），另带可选的内嵌浏览器组件（系统 WebView2）；风格对齐现代 Web UI（深色、圆角、渐变、投影、flex 布局），样式可完全自定义。
 
@@ -17,6 +17,37 @@
 │  internal/win32     Win32/WGL 绑定（purego）  │
 └──────────────────────────────────────────────┘
 ```
+
+## 界面预览
+
+以下全部为**真实运行截图**（1180×760，深色主题），源文件在 [`ui/assets/`](ui/assets)。
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/登录页.png" alt="登录页"><br><sub><b>登录页</b> · 表单校验 / 输入焦点 / 记住我</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/仪表盘.png" alt="仪表盘"><br><sub><b>仪表盘</b> · KPI 卡 / 进度条 / 活动列表</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/表格.png" alt="数据表格"><br><sub><b>数据表格</b> · 斑马纹 / 状态标签 / 行内进度 / 整行点击</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/表单.png" alt="表单与弹窗"><br><sub><b>表单与弹窗</b> · 下拉 / 多行 / 数字 / 日期 / 四类弹窗 / 抽屉</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/图表组件.png" alt="图表组件"><br><sub><b>图表组件</b> · 折线 / 面积 / 柱状 / 饼 / 环形 / 雷达 / 散点</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/markdown渲染.png" alt="Markdown 渲染"><br><sub><b>Markdown 渲染</b> · 代码高亮 / 表格 / 数学公式 / Mermaid</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/webview组件.png" alt="WebView 内嵌浏览器"><br><sub><b>WebView 内嵌浏览器</b> · 系统 WebView2 真网页 + 自绘地址栏</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/视频播放器.png" alt="视频播放器"><br><sub><b>视频播放器</b> · mp4/mkv/mov/avi/webm/flv/ts/m3u8 + 自绘控制条</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/音乐播放器.png" alt="音乐播放器"><br><sub><b>音乐播放器</b> · 封面 / 频谱 / 进度 / 播放列表</sub></td>
+    <td width="50%" valign="top"><img src="ui/assets/系统操作.png" alt="系统能力"><br><sub><b>系统能力</b> · 图片 / 拖入文件 / 毛玻璃 / Emoji / 动画 / 输入法</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="ui/assets/浅色主题.png" alt="浅色主题"><br><sub><b>浅色主题</b> · <code>ui.UseTheme(ui.ThemeLight)</code> 一键切换，组件与图表同步换肤</sub></td>
+    <td width="50%" valign="top"><i>以上界面全部由 OpenGL 自绘：无 HTML、无 CSS、无 WebView 参与主体渲染。<br>运行 <code>go run ./cmd/gallery</code> 可逐页查看。</i></td>
+  </tr>
+</table>
 
 ## 为什么不用 WebView 也能做到 Web 观感
 
@@ -91,6 +122,8 @@ go build -ldflags "-H=windowsgui" -o app.exe ./cmd/demo
 ./build.ps1 -Target all     # gallery + demo + tools
 ./build.ps1 -Upx            # 再叠加 UPX -9（体积最小）
 ./build.ps1 -Dev            # 开发构建：保留符号 + 控制台日志
+./build.ps1 -Installer          # 构建 + 打 NSIS 安装器 -> dist\GoGUI-<版本>-setup.exe
+./build.ps1 -Bump patch -Installer # 版本号 +1 后打包
 ```
 
 实测（gallery，go1.26 windows/amd64）：
@@ -106,6 +139,67 @@ go build -ldflags "-H=windowsgui" -o app.exe ./cmd/demo
 - `GOAMD64` 默认 `v1`（兼容旧 CPU），自用机器可设 `v3` 换取少量性能；
 - 不想上 UPX 又要点体积：`-ldflags "-s -w"` 已是大头，剩下的只有图片解码器（gif/jpeg/png）与 `x/image` 字体光栅化，按需裁剪收益有限；
 - 体积对比可用 `Get-ChildItem dist\*.exe | % { "{0:N2} MB  {1}" -f ($_.Length/1MB), $_.Name }`。
+
+## 版本号管理
+
+版本号只有一处来源：仓库根目录的 `VERSION.txt`（语义化版本 `x.y.z`）。
+
+```powershell
+./build.ps1 -Bump patch        # 0.1.0 -> 0.1.1，并写回 VERSION.txt
+./build.ps1 -Bump minor        # 0.1.0 -> 0.2.0
+./build.ps1 -Bump major        # 0.1.0 -> 1.0.0
+./build.ps1 -Channel release   # 标记正式通道（默认 dev，exe 属性里会体现）
+```
+
+一次构建把版本号写进三处，无需手工同步：
+
+| 位置 | 注入方式 | 读取方式 |
+| --- | --- | --- |
+| 运行时 | `-ldflags -X gogui/internal/version.Number=...` | `version.String()` / `version.Full()` |
+| exe 文件属性 | `tools/winres` 生成 `cmd/gallery/rsrc_windows_*.syso` | 右键属性 → 详细信息 |
+| 安装器 | `makensis /DVERSION=... /DVI_VERSION=...` | 「应用和功能」里的版本、安装包文件名 |
+
+`internal/version` 还带提交哈希、构建时间、发布通道，以及语义化版本解析与比较（`version.Parse` / `version.Compare`）：
+
+```go
+import "gogui/internal/version"
+
+version.String()   // v0.1.0
+version.Title()    // GoGUI v0.1.0（gallery 窗口标题就用它）
+version.Full()     // v0.1.0 · release · 1a2b3c4 · 2026-10-29T03:49:04Z
+```
+
+## 安装器（NSIS 3）
+
+```powershell
+./build.ps1 -Installer                  # -> dist\GoGUI-0.1.0-setup.exe
+./build.ps1 -Installer -Upx             # 与 UPX 压缩一起用
+./build.ps1 -Installer -Channel release # 正式通道
+```
+
+- 需要 NSIS 3（`makensis`）：装在 `C:\Program Files (x86)\NSIS\` 会自动发现，也可用环境变量 `NSIS_EXE` 指定路径；
+- 向导第一步选择安装范围：
+  - **仅为我安装** → `%LOCALAPPDATA%\Programs\GoGUI`，注册表写 HKCU，**不需要管理员**；
+  - **为所有用户安装** → `%ProgramFiles%\GoGUI`，注册表写 HKLM，未提权时自动以 UAC 重新启动自身；
+- 目录页可自定义安装目录，自定义路径会被完整保留（两种范围互不覆盖，并各自记住上次的选择）；
+- 静默安装：`GoGUI-0.1.0-setup.exe /S /currentuser /D=D:\Apps\GoGUI`（`/D` 必须是最后一个参数、路径不加引号）；`/allusers` 同理；
+- 安装包文件名、exe 文件属性、卸载列表里的 `DisplayVersion` 全部来自 `VERSION.txt`；
+- 卸载会清理安装目录、开始菜单与桌面快捷方式、注册表（含另一种范围的残留）。
+
+## exe 图标与文件属性（tools/winres）
+
+`tools/winres` 是零依赖的资源生成器：直接输出 COFF `.syso`，不需要 windres / rsrc / cgo。
+
+```powershell
+go run ./tools/winres -arch amd64 -ico ui/assets/icon.ico `
+  -version 0.1.0 -product GoGUI -company Go-gui `
+  -desc "GoGUI 纯 Go 自绘 GUI 框架" -copyright "Copyright (c) 2026 Mr.Shu" `
+  -commit 1a2b3c4 -channel release -out cmd/gallery/rsrc_windows_amd64.syso
+```
+
+- 把图标（RT_ICON + RT_GROUP_ICON）与版本信息（RT_VERSION）写进同一个 `.rsrc` 节，Go 链接器会合并进 PE 并填好资源数据目录；
+- 一个可执行文件只能有一个 `.rsrc` 节，所以**不要**再叠加其他工具生成的 syso（会报 `too many .rsrc sections`）；
+- `build.ps1` 默认每次构建前都重新生成 `amd64` 与 `386` 两份，`-NoRes` 可跳过。
 
 ## 状态与交互
 
