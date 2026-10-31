@@ -303,6 +303,27 @@ func (r *Renderer) dropSSAART() {
 	}
 }
 
+// ReleaseOffscreen 释放可重建的离屏目标（超采样 RT + 毛玻璃中间层）。
+//
+// 窗口最小化或长时间闲置时调用：一张超采样 RT 就是「窗口像素 × ssaa² × 4B」
+// （1166×746 的窗口在 2× 下约 14MB），毛玻璃还有 4 层中间纹理；
+// 这些资源下一帧都会按需重建，闲置时没有必要常驻显存。
+func (r *Renderer) ReleaseOffscreen() {
+	r.dropSSAART()
+	r.DestroyBlur()
+}
+
+// OffscreenBytes 离屏目标占用的显存字节数（估算，供内存统计输出）。
+func (r *Renderer) OffscreenBytes() int64 {
+	n := int64(0)
+	for _, rt := range []*fboRT{r.ssaaRT, r.srcTex, r.halfA, r.halfB, r.quarter} {
+		if rt != nil {
+			n += int64(rt.w) * int64(rt.h) * 4
+		}
+	}
+	return n
+}
+
 // ensureSSAA 准备超采样离屏目标并校验完整性；不可用时返回 false，绘制退回呈现目标。
 func (r *Renderer) ensureSSAA() bool {
 	if r.ssaa <= 1.01 || r.pw <= 0 || r.ph <= 0 {
@@ -700,22 +721,25 @@ func (r *Renderer) pushShape(sh Shape) {
 		for i := 0; i < 4; i++ {
 			rad[i] = sh.Radius[i] + sp
 		}
-		r.appendQuad(outer, rad, Paint{}, Paint{A: -1}, blur*1.6, 2, 0)
+		r.appendQuad(outer, rad, Paint{}, Paint{A: -1}, blur*1.6, 2, 0, 0)
 	}
 
 	if sh.Grad.On {
-		r.appendQuad(rs, sh.Radius, sh.Grad.From, sh.Grad.To, 0.7, 0, 0)
+		r.appendQuad(rs, sh.Radius, sh.Grad.From, sh.Grad.To, 0.7, 0, 0, sh.Grad.Angle)
 	} else if sh.Fill.A > 0 {
-		r.appendQuad(rs, sh.Radius, sh.Fill, Paint{A: -1}, 0.7, 0, 0)
+		r.appendQuad(rs, sh.Radius, sh.Fill, Paint{A: -1}, 0.7, 0, 0, 0)
 	}
 
 	if sh.Stroke > 0 && sh.StrokeColor.A > 0 {
-		r.appendQuad(rs.InsetAll(sh.Stroke*0.5), sh.Radius, sh.StrokeColor, Paint{A: -1}, 0.7, 1, sh.Stroke)
+		r.appendQuad(rs.InsetAll(sh.Stroke*0.5), sh.Radius, sh.StrokeColor, Paint{A: -1}, 0.7, 1, sh.Stroke, 0)
 	}
 	_ = s
 }
 
-func (r *Renderer) appendQuad(rs geom.Rect, rad [4]float32, c1, c2 Paint, feather, mode, stroke float32) {
+// appendQuad 追加一个矩形（6 顶点）。渐变方向（CSS 角度：0=向上 / 90=向右 /
+// 180=向下）通过把两色混合结果烘焙到四个角的顶点色实现，由 GPU 在三角形内插值，
+// 不需要新增顶点属性，着色器保持原样（用不到两色 mix 时把 vColor2.A 置 -1）。
+func (r *Renderer) appendQuad(rs geom.Rect, rad [4]float32, c1, c2 Paint, feather, mode, stroke, angle float32) {
 	// 填充/描边的 SDF 边缘过渡带宽度按「设备像素」恒定：超采样时画布分辨率是 ss 倍，
 	// 若仍按逻辑像素给 0.7，过渡带在设备空间就变成 0.7*ss 像素，降采样后边缘反而更软，
 	// 白白吃掉超采样带来的锐度。这里除以 ss，让 1.25×/1.5×/2× 的边缘都比 1:1 更干净。
@@ -729,13 +753,42 @@ func (r *Renderer) appendQuad(rs geom.Rect, rad [4]float32, c1, c2 Paint, feathe
 	hx, hy := rs.W/2, rs.H/2
 	cx, cy := rs.X+hx, rs.Y+hy
 	s := r.scale
+
+	grad := c2.A >= 0
+	var dx, dy, den float32
+	if grad {
+		a := float64(angle) * math.Pi / 180
+		dx, dy = float32(math.Sin(a)), -float32(math.Cos(a))
+		den = float32(math.Abs(float64(dx)))*hx + float32(math.Abs(float64(dy)))*hy
+		if den <= 0 {
+			grad = false
+		}
+	}
+	corner := func(lx, ly float32) Paint {
+		if !grad {
+			return c1
+		}
+		t := (lx*dx+ly*dy)/den*0.5 + 0.5
+		if t < 0 {
+			t = 0
+		} else if t > 1 {
+			t = 1
+		}
+		return Paint{
+			R: c1.R + (c2.R-c1.R)*t,
+			G: c1.G + (c2.G-c1.G)*t,
+			B: c1.B + (c2.B-c1.B)*t,
+			A: c1.A + (c2.A-c1.A)*t,
+		}
+	}
 	cs := [6][2]float32{{-hx, -hy}, {hx, -hy}, {hx, hy}, {-hx, -hy}, {hx, hy}, {-hx, hy}}
 	for _, c := range cs {
+		v := corner(c[0], c[1])
 		r.shapeData = append(r.shapeData,
 			(cx+c[0])*1, (cy+c[1])*1,
 			c[0], c[1],
-			c1.R, c1.G, c1.B, c1.A,
-			c2.R, c2.G, c2.B, c2.A,
+			v.R, v.G, v.B, v.A,
+			0, 0, 0, -1,
 			hx, hy,
 			rad[0], rad[1], rad[2], rad[3],
 			feather, mode, stroke, 0,
@@ -810,4 +863,3 @@ func (r *Renderer) Draw(instrs []Instr) {
 		}
 	}
 }
-

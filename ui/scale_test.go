@@ -42,8 +42,8 @@ func TestSuperSamplePixelBudget(t *testing.T) {
 	}
 	cases := []c{
 		{1920, 1080, 2, 2},   // 1080p × 2 = 8.3M，预算内
-		{3840, 2160, 2, 2},   // 4K × 2 = 33.2M，预算内（8192×4320）
-		{5120, 2880, 2, 1.5}, // 5K × 2 超预算，降到 1.5
+		{2560, 1440, 2, 1.5}, // 2K × 2 = 14.7M 超预算（9.4M），降到 1.5
+		{3840, 2160, 2, 1},   // 4K × 2 = 33.2M，只能回到 1
 		{7680, 4320, 2, 1},   // 已到预算边界，只能回到 1
 		{8000, 4000, 2, 1},
 		{1920, 1080, 1, 1}, // 关闭时不变
@@ -53,7 +53,7 @@ func TestSuperSamplePixelBudget(t *testing.T) {
 		if got != k.want {
 			t.Fatalf("ssaaForBudget(%dx%d, %.2f) = %.2f, want %.2f", k.w, k.h, k.in, got, k.want)
 		}
-		if float64(k.w)*float64(k.h)*float64(got)*float64(got) > ssPixelBudget {
+		if float64(k.w)*float64(k.h)*float64(got)*float64(got) > ssPixelBudget && got > 1.01 {
 			t.Fatalf("降档后仍超预算：%dx%d × %.2f", k.w, k.h, got)
 		}
 	}

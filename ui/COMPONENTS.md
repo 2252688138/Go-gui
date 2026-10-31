@@ -143,6 +143,7 @@ return ui.Column(
 | --- | --- |
 | `ui/node.go` | `Box` / `Row` / `Column` / `Stack` / `Grid` / `Wrap` / `Masonry` / `EqualRow` / `Pick` / `If` / `Each` |
 | `ui/widgets.go` | `Btn` / `Input` / `Switch` / `Checkbox` / `Radio` / `Slider` / `Progress` / `Ring` / `Table` / `Tabs` / `TabsBar` / `Accordion` / `Card` / `Tag` / `Toast` / `Modal` / `TooltipOf` / `MenuItem` 菜单 |
+| `ui/switch.go` | 开关多样式：`SwitchEx` + `SwitchStyle` / `SwitchDefault` / `SwitchSized`（大中小）/ `SwitchIcon` / `SwitchSparkle` / `SwitchLabeled` / `SwitchGradient` / `SwitchDisabled`；自定义：`WithIcon` / `WithIconNode` / `WithLabels` / `WithLabelNodes` / `WithLabelStyle` / `WithLabelWidth` |
 | `ui/image.go` | `Image` / `ImageSized`（PNG/JPEG/GIF/BMP，后台解码） |
 | `ui/anim.go` | `Tween` / `Spring` / `Keyframes` |
 | `ui/style.go` | `St()` 链式样式（尺寸 / 间距 / 圆角 / 渐变 / 阴影 / 绝对定位 / 毛玻璃） |
@@ -150,7 +151,24 @@ return ui.Column(
 ```go
 ui.Btn("保存", ui.BtnPrimary, save)
 ui.Input("name", value, "请输入", func(v string) { value = v })
-ui.Switch("sw", on, func(v bool) { on = v })
+ui.Switch("sw", on, func(v bool) { on = v })          // 默认样式
+ui.SwitchSparkle("boost", on, nil)                    // ✦ 图标 + 紫色渐变发光胶囊
+ui.SwitchLabeled("blur", "ON", "OFF", on, nil)        // 轨道内文字
+ui.SwitchSized("sm", ui.SwitchSmall, on, nil)          // 尺寸预设（Small / Normal / Large）
+
+// 自定义图标 / 文字：样式构建器返回副本，可链式组合
+st := ui.SwitchStyleSparkle().WithIconNode(ui.Dot("#22d3ee", 10)) // 任意节点当图标
+ui.SwitchEx("k1", on, st, func(v bool) { on = v })
+
+st2 := ui.SwitchStyleLabeled("开", "关").WithLabelStyle("#ffffff", "#c7d2fe", 11) // 文案 + 颜色 + 字号
+ui.SwitchEx("k2", on, st2, nil)
+
+// 任意节点作为轨道内容（宽度用 WithLabelWidth 指定）
+st3 := ui.SwitchStyleDefault().WithLabelNodes(
+    ui.Text("✓").St(ui.St().Text(12, 700, "#ffffff")),
+    ui.Text("✕").St(ui.St().Text(12, 700, "#94a3b8")),
+).WithLabelWidth(12)
+ui.SwitchEx("k3", on, st3, nil)
 ```
 
 ---
@@ -221,6 +239,45 @@ ui.Stack(page, ui.MarkdownLightbox())
 示例页：`go run ./cmd/gallery --case markdown`。
 
 ---
+
+## 3.7 文件树 / 图文卡片 / 社区帖子 / 分页（ui/tree.go + ui/cards.go + ui/pager.go）
+
+| 文件 | 组件 |
+| --- | --- |
+| `ui/tree.go` + `ui/tree_row.go` | `FileTree` / `TreeNode` / `TreeOptions` / `TreeSetOpen` / `TreeSetAllOpen` / `TreeSelected` |
+| `ui/cards.go` | `MediaCard` / `MediaCards` / `MediaItem`；`ListRows` / `ListRowItem`；`PostCard` / `PostItem` |
+| `ui/pager.go` | `Pager` / `PagerOptions`（省略号折叠 + 上锁页禁用） |
+
+```go
+// 文件树：展开状态按 Key 记忆，折叠的子树不构建节点
+ui.FileTree(nodes, ui.TreeOptions{
+    Key:      "files",
+    Expanded: []string{"ui"},      // 仅首次构建生效
+    Selected: "ui/layout.go",
+    OnPick:   func(n ui.TreeNode) { sel = n.Key },
+})
+ui.TreeSetAllOpen("files", nodes, true) // 工具条：全部展开 / 收起
+
+// 图文卡片：封面 + 角标 + 评分 + 标题 / 标签 / 操作按钮；MediaCards 用 Wrap 自动换行
+ui.MediaCards(items, ui.MediaCardOptions{Width: 186, OnPick: open, OnAction: setWallpaper}, 12)
+
+// 列表行：图标 / 头像 + 标题与副标题 + 右侧标签 / 说明，可带多选与分隔线
+ui.ListRows(rows, ui.ListRowsOptions{Key: "rows", Dividers: true, CheckBox: true,
+    Selected: sel, OnPick: pick, OnCheck: check})
+
+// 社区帖子：头像 / 昵称 / 时间 / 正文 / 话题 / 配图 / 点赞评论转发
+ui.PostCard(post, ui.PostCardOptions{OnLike: like, OnOpen: open})
+
+// 分页器：省略号折叠，Locked 之后的页显示锁标且不可点
+ui.Pager(ui.PagerOptions{Key: "list", Page: page, Total: 9, Locked: 6, OnPick: goPage})
+```
+
+示例页：`go run ./cmd/gallery --case list`（顶部下划线页签切「列表 / 表格」）。
+
+注意：`Pager` 用 `Wrap` 排版且显式指定总宽——`Wrap` 放在 `Row` 里测量时主轴无上限，
+不给宽度会折成一列。
+
+---
 ## 4. 系统能力
 
 
@@ -276,6 +333,27 @@ ui.Stack(page, ui.MarkdownLightbox())
 | `ui/debug.go` | `LayoutForTest` / `DebugDump`（布局单测与 dump） |
 
 `Options.DumpLayout` 可导出首帧布局树：`go run ./cmd/gallery --dump dump.txt --case music`。
+
+---
+
+## 4.5 组件套件（虚拟列表 / 命令面板 / 富文本 / Dock / 通知中心 …）
+
+本轮新增约 60 项组件与能力，统一在 `go run ./cmd/gallery --case suite` 演示，
+完整用法见 `docs/components-suite.md`。速查：
+
+| 分组 | 入口 |
+| --- | --- |
+| 基础设施 | `RichText` / `PushFocusScope` / `SetTokens` / `KeepAlive` / `ReducedMotion` / `SetPref` / `FLIP` / `T` |
+| P0 门面 | `VList` / `SkeletonBlock` / `LoadingOverlay` / `EmptyState` / `ResultPage` / `AsyncSection` / `Split` / `CommandPalette` |
+| 输入 | `AutoComplete` / `TagInput` / `Rate` / `RangeSlider` / `KeyCapture` / `TimePicker` / `Cascader` / `Upload` / `ColorPicker` |
+| 展示 | `Carousel` / `Timeline` / `Steps` / `Segmented` / `Descriptions` / `Statistic` / `Calendar` / `Watermark` / `ImagePreview` / `AvatarGroup` / `Tour` / `EllipsisText` |
+| 表格 | `TableV`（虚拟/分组/合计/列宽拖拽）/ `ReorderList` / `MoveSlice` |
+| 桌面 | `Monitors` / `CaptureScreen` / `WatchClipboard` / `SingleInstance` / `Print` / `PrintPreview` / `ApplyUpdate` |
+| 编辑 | `NewRichEditor` / `RichEditor` / `RichToolbar` / `NewUndo` / `SelectionArea` |
+| 浮层 | `AutoCompleteLayers` / `TimeLayers` / `CascaderLayers` / `ColorLayers` / `CommandPaletteLayer` / `TourLayer` / `NotifyLayer` / `ImagePreviewLayer` |
+
+平台差异用 `HasCap` 分支（新增 `CapPrint` / `CapScreenCapture` / `CapClipboardWatch` /
+`CapMultiMonitor` / `CapSingleInstance` / `CapModernNotify`）；非 Windows 端均有安全降级桩。
 
 ---
 

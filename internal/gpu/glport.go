@@ -58,4 +58,7 @@ const (
 	GL_FRAMEBUFFER          = 0x8D40
 	GL_COLOR_ATTACHMENT0    = 0x8CE0
 	GL_FRAMEBUFFER_COMPLETE = 0x8CD5
+
+	// GL_RENDERER glGetString 的参数：返回当前渲染器名称（如 llvmpipe）。
+	GL_RENDERER = 0x1F01
 )

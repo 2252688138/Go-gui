@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows || ((linux || freebsd) && !android)
 
 // Go-gui
 // Author  : Mr.Shu
@@ -131,22 +131,5 @@ func (a *App) paintVideoPlaceholder(n *Node, r geom.Rect, st *Style) {
 	a.paintText(tmp, r, &tmp.Style)
 }
 
-// fitVideoRect 按填充方式计算画面实际矩形（Contain 留黑边 / Cover 溢出裁切 / Fill 拉伸）。
-func fitVideoRect(r geom.Rect, sw, sh float32, fit VideoFit) geom.Rect {
-	if sw <= 0 || sh <= 0 || r.W <= 0 || r.H <= 0 {
-		return r
-	}
-	if fit == FitFill {
-		return r
-	}
-	scale := r.W / sw
-	if fit == FitCover {
-		if v := r.H / sh; v > scale {
-			scale = v
-		}
-	} else if v := r.H / sh; v < scale {
-		scale = v
-	}
-	dw, dh := sw*scale, sh*scale
-	return geom.Rect{X: r.X + (r.W-dw)/2, Y: r.Y + (r.H-dh)/2, W: dw, H: dh}
-}
+// fitVideoRect 移到 video.go：它是纯几何计算，与平台无关，
+// 这样 video_test.go 在所有平台都能跑。

@@ -277,7 +277,7 @@ func Slider(key string, v float32, onChange func(float32)) *Node {
 	}
 	n := Stack(
 		Box().St(St().W(trackW).H(4).R(2).BgC(ColTrack).AbsTL(0, trackY)),
-		Box().St(St().W(v*usable+thumb/2).H(4).R(2).BgGrad(ColPrimary, ColPrimary2, 0).AbsTL(0, trackY)),
+		Box().St(St().W(v*usable+thumb/2).H(4).R(2).BgGrad(ColPrimary, ColPrimary2, 90).AbsTL(0, trackY)),
 		Box().St(St().W(thumb).H(thumb).R(thumb/2).BgC("#ffffff").
 			Stroke(3, ColPrimary).Shadow(10, 2, 0, "rgba(99,102,241,0.55)").
 			AbsTL(v*usable, thumbY)),
@@ -331,6 +331,27 @@ var inputCaret = map[string]int{}
 
 // inputSubmit 记录每个输入框的回车提交回调（地址栏等需要「回车即执行」的场景）。
 var inputSubmit = map[string]func(){}
+
+// inputKeyHandlers / inputCharHandlers 记录输入框自身的按键/字符处理，
+// 供 AutoComplete / TagInput 这类需要在保留光标编辑的前提下追加按键语义的组件复用。
+var (
+	inputKeyHandlers  = map[string]func(uint32){}
+	inputCharHandlers = map[string]func(rune){}
+)
+
+// callInputKey 转交给输入框自身的光标/删除处理。
+func callInputKey(key string, k uint32) {
+	if fn := inputKeyHandlers[key]; fn != nil {
+		fn(k)
+	}
+}
+
+// callInputChar 转交给输入框自身的字符插入处理。
+func callInputChar(key string, r rune) {
+	if fn := inputCharHandlers[key]; fn != nil {
+		fn(r)
+	}
+}
 
 // InputSubmit 带回车提交的单行输入框：回车触发 onSubmit（地址栏、搜索框用）。
 func InputSubmit(key, value, placeholder string, onChange func(string), onSubmit func()) *Node {
@@ -399,7 +420,7 @@ func inputNode(key, value, placeholder string, password bool, onChange func(stri
 			cells = append(cells, Box().St(St().W(1.5).H(16).BgC(ColPrimary).MarXY(0.5, 0)))
 		}
 		cells = append(cells, Text(after).St(St().Text(13, 400, ColText)))
-		content = Row(cells...).St(St().AnimOn())
+		content = Row(cells...).St(St().AnimSlowOn())
 	} else if value == "" {
 		content = Row(Text(placeholder).St(St().Text(13, 400, ColPlaceholder)))
 	} else {
@@ -467,6 +488,8 @@ func inputNode(key, value, placeholder string, password bool, onChange func(stri
 		}
 		RequestRedraw()
 	}
+	inputKeyHandlers[key] = n.OnKey
+	inputCharHandlers[key] = n.OnChar
 	return n
 }
 
@@ -491,11 +514,24 @@ func Spinner(size float32, color string) *Node {
 	return Stack(items...).St(St().W(size).H(size))
 }
 
-// Skeleton 骨架屏占位（呼吸高亮动画）。
+// Skeleton 骨架屏占位（呼吸 + 流光动画）。
 func Skeleton(w, h float32) *Node {
-	t := AnimTime()
-	k := 0.05 + 0.05*(1+float32(math.Sin(float64(t)*2.2)))/2
-	return Box().St(St().W(w).H(h).R(6).BgC(whiteA(k)))
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 12
+	}
+	base := 0.06 + 0.03*(1+float32(math.Sin(float64(AnimTime())*2.4)))/2
+	p := ShimmerPhase(0.9)
+	hlW := w * 0.45
+	x := -hlW + p*(w+hlW*2)
+	hl := Box().St(St().W(hlW).H(h).R(6).
+		BgGrad(whiteA(0), whiteA(0.10), 90).AbsTL(x, 0))
+	return Stack(
+		Box().St(St().AbsFill().R(6).BgC(whiteA(base))),
+		hl,
+	).St(St().W(w).H(h).Clipped().AnimSlowOn().NoFocusRing())
 }
 
 // Toast 轻提示（悬浮于容器底部中央，需放在 Stack 中）。
@@ -541,15 +577,41 @@ func Modal(open bool, title, body string, onClose func()) *Node {
 	return ModalEx(open, title, body, "取消", "确定", onClose, onClose, onClose, 420)
 }
 
-// ModalEx 可定制按钮与宽度的模态框。
+// ModalEx 可定制按钮与宽度的模态框（带进出场过渡与焦点陷阱）。
 func ModalEx(open bool, title, body, cancelLabel, okLabel string, onCancel, onConfirm, onClose func(), width float32) *Node {
-	if !open {
-		return nil
+	return ModalKey("modal:"+title, open, title, body, cancelLabel, okLabel, onCancel, onConfirm, onClose, width)
+}
+
+// ModalKey 带唯一 Key 的模态框：多个同标题弹窗共存时用它避免焦点/动画状态互撞。
+func ModalKey(key string, open bool, title, body, cancelLabel, okLabel string, onCancel, onConfirm, onClose func(), width float32) *Node {
+	if key == "" {
+		key = "modal:" + title
 	}
 	if width <= 0 {
 		width = 420
 	}
-	scrim := Box().St(St().AbsFill().BgC(ColScrim)).Tap(onClose)
+	if open {
+		PushFocusScope(key, true)
+		OpenOverlay(key, func() bool {
+			if onClose != nil {
+				onClose()
+			}
+			return true
+		})
+	} else {
+		PopFocusScope(key)
+		CloseOverlay(key)
+	}
+	visible, t := KeepAlive(key, open, 0.18)
+	if !visible {
+		return nil
+	}
+	_, dy := PopOffset(t)
+	scrim := Scrim(t*0.95, key+"-scrim").Tap(func() {
+		if onClose != nil {
+			onClose()
+		}
+	})
 	dialog := Column(
 		Row(
 			Text(title).St(St().Text(16, 600, ColText)).Grow(1),
@@ -564,9 +626,9 @@ func ModalEx(open bool, title, body, cancelLabel, okLabel string, onCancel, onCo
 		).St(St().GapOf(10)).AlignTo(AlignCenter),
 	).St(St().W(width).Padding(22).R(18).GapOf(14).
 		BgC(ColPanelDeep).Stroke(1, ColStroke).Shadow(48, 18, 0, "rgba(0,0,0,0.55)").
-		AbsCenter())
+		AbsCenter().Fade(t).Translate(0, dy))
 
-	return Stack(scrim, dialog).St(St().AbsFill())
+	return Stack(scrim, dialog).St(St().AbsFill()).K(key + "-root")
 }
 
 // ---- 导航与列表 ----

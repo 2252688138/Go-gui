@@ -6,8 +6,12 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"strconv"
+	"sync"
+
+	"gogui/internal/gpu"
 )
 
 // 界面缩放（整体 UI zoom）：
@@ -40,10 +44,12 @@ const (
 	SS200  float32 = 2
 )
 
-// ssPixelBudget 超采样离屏目标的像素预算（约 8K：8192×4320）。
-// 4K 窗口 × 2 倍已经是 7680×4320（RGBA 约 130MB），再往上会明显吃显存、压填充率，
-// 因此超出预算时自动逐级降档（2× → 1.5× → 1.25× → 关），保证不会一开超高清就卡顿。
-const ssPixelBudget = 8192 * 4320
+// ssPixelBudget 超采样离屏目标的像素预算（约 9.4M：4096×2304）。
+// 离屏目标为 RGBA8，像素数直接决定显存：预算 35M（旧值 8192×4320）时
+// 一次 4K 窗口 2 倍超采样就要 130MB+，最小化/闲置也一直常驻。
+// 现在收紧到 9.4M（高至 37MB）：常见窗口（如 1920×1080 × 2 = 8.3M）不受影响，
+// 超过时逐级降档（2× → 1.5× → 1.25× → 关），保证不会一开超高清就把显存吃干。
+const ssPixelBudget = 4096 * 2304
 
 // ssMode 超采样档位设置（SSAuto = 跟随 DPI 自动）。
 var ssMode float32 = SSAuto
@@ -111,10 +117,36 @@ func SuperSample() float32 {
 	return superSampleFor(dpi, ssMode)
 }
 
+// softwareGL 软件渲染检测结果（只算一次）。
+var (
+	softOnce sync.Once
+	softGL   bool
+)
+
+// rendererIsSoftware 当前 GL 是否为软件光栅（llvmpipe / softpipe / swrast / Basic Render）。
+//
+// 这类后端每帧用 CPU 填充像素：1166×746 窗口 2× 超采样就是 348 万像素/帧，
+// 全屏后飙到 800 万以上，帧时间秒级 —— 表现为「窗口一片黑（只来得及清屏）」。
+func rendererIsSoftware() bool {
+	softOnce.Do(func() {
+		softGL = gpu.SoftwareRenderer()
+		if softGL {
+			fmt.Fprintf(os.Stderr, "[gogui] 检测到软件渲染（%s）：自动档已关闭整帧超采样，避免全屏时慢到像黑屏。\n", gpu.RendererName())
+		}
+	})
+	return softGL
+}
+
 // superSampleFor 按 DPI 与档位算出超采样倍数。
 // 自动档：DPI < 150% 时窗口像素本身比较粗（逻辑 1px 只对应 1~1.25 物理像素），
 // 走 2× 超采样收益最大；150% 以上逻辑像素已对应 1.5+ 物理像素，1:1 绘制就足够清晰。
+//
+// 例外：软件渲染（WSLg 的 llvmpipe、无显卡驱动环境）自动档一律 1:1——
+// 超采样在这里是纯 CPU 负担，全屏会导致「黑屏」观感；用户显式指定档位时仍然尊重。
 func superSampleFor(dpiScale, mode float32) float32 {
+	if mode <= 0 && rendererIsSoftware() {
+		return 1
+	}
 	if mode <= 0 {
 		if dpiScale >= 1.5 {
 			return 1

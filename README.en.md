@@ -1,10 +1,10 @@
-﻿# GoGUI
+# GoGUI
 
 A pure-Go, **zero-cgo** declarative GUI toolkit that draws its whole interface with OpenGL — no WebView needed for the UI itself (an optional embedded WebView2 component is available). The visual language follows modern web UI: dark surfaces, rounded corners, gradients, shadows, flex layout, and a fully customizable style DSL.
 
 ```
 ┌──────────────────────────────────────────────┐
-│  cmd/demo / cmd/gallery     sample apps      │
+│  cmd/gallery                sample apps      │
 ├──────────────────────────────────────────────┤
 │  ui                         declarative tree │
 │                             style / layout   │
@@ -48,6 +48,22 @@ Real running screenshots (1180×760, dark theme). Image files live in [`ui/asset
   </tr>
 </table>
 
+## What's new
+
+Recent work focused on list / content pages and a batch of interaction details:
+
+| Area | Added / fixed |
+|---|---|
+| List widgets | `FileTree` (indent levels, expand/collapse, selected row; expand state is remembered per `Key` and collapsed subtrees are not built), `MediaCard` (cover / badge / score / title / tags / action button), `ListRows` (icon or avatar, checkbox, dividers, selected row), `PostCard` (community post with likes / comments / shares), `Pager` (ellipsis folding + locked pages) |
+| Gallery | The “Lists & Tables” page now uses **in-page underlined tabs**: List (tree / cards / rows / posts / pager) and Table (data table / chat / virtual list / drag-reorder / empty states) |
+| Switches | `SwitchEx` with style presets (default / sparkle / labeled / gradient / sizes / disabled) and builders for custom icons, labels and widths |
+| Color picker | Hue strip laid out in a row, HEX field width fixed, SVG panel gradient restored; the eyedropper now samples in screen coordinates |
+| Gradients | `BgAngle` bakes per-corner colors into vertex colors, so any CSS angle works instead of collapsing to a solid fill |
+| Drag | `ReorderList` registers `OnDrag` — the app only creates a drag key when `OnDrag != nil`, so an `OnDragEnd`-only node never sees the release |
+| Scrolling | The first wheel event now creates the offset entry, fixing “scrollbar shows but the wheel does nothing until you drag it” |
+| Layout | Percentage sizes only resolve when the parent axis is definite; use `Grow(1)` to fill — `Hp(100)` resolves to 0 on an unbounded main axis (the WebView2 blank-page root cause) |
+| Windows | The gallery now allows **multiple instances**: every launch gets its own window and page state (`ui.SingleInstance` is still available as a library feature) |
+
 ## Why it looks like the web without a browser
 
 | Web feature | Implementation |
@@ -90,9 +106,9 @@ func view() *ui.Node {
 ```
 
 ```bash
-go run ./cmd/demo
+go run ./cmd/gallery
 # release build without a console window:
-go build -ldflags "-H=windowsgui" -o app.exe ./cmd/demo
+go build -ldflags "-H=windowsgui" -o app.exe ./cmd/gallery
 ```
 
 Requirements: Go 1.24+ (developed on Go 1.26, windows/amd64). No CGO toolchain, no external runtime — Win32, WGL and OpenGL are resolved dynamically through `purego`.
@@ -243,7 +259,9 @@ Beyond primitives (`Box/Row/Column/Center/Spacer/Text/Button/Scroll/Stack`), `ui
 | Forms | `Input`, `PasswordInput`, `Checkbox`, `Radio`, `Switch`, `Slider`, `Progress`, `Ring`, `SelectBox`, `Textarea`, `NumberInput`, `SearchInput`, `Chip`, `DateBox` |
 | Display | `Card`, `Title`, `Divider`, `Tag`, `Dot`, `Avatar`, `Badge`, `KeyValue`, `Empty`, `Skeleton`, `Spinner` |
 | Navigation | `Tabs`, `TabsBar`, `Breadcrumb`, `Accordion`, `MenuBar` |
-| Data | `Table` (fixed/flexible columns, zebra stripes, row clicks), `ListItem` |
+| Data | `Table` (fixed/flexible columns, zebra stripes, row clicks), `TableV` (virtual scroll / groups / footer / resizable columns), `VList`, `ReorderList`, `ListItem` |
+| Lists & content | `FileTree`, `MediaCard` / `MediaCards`, `ListRows`, `PostCard`, `Pager` |
+| Switches | `Switch` plus `SwitchEx` with `SwitchDefault` / `SwitchSparkle` / `SwitchLabeled` / `SwitchGradient` / `SwitchSized` / `SwitchDisabled` presets and custom icon / label builders |
 | Media | `Video`, `VideoPlayer`, `Player`, `VideoClip`, `MediaSource` (ffmpeg), `MusicPlayer` |
 | Browser | `WebView` (system WebView2) + `WebViewNode` / `WebViewBar` / `WebViewStatus` |
 | Overlays | `ModalPanel` / `AlertDlg` / `ConfirmDlg` / `PromptDlg` / `Drawer`, `MenuPanel`, `TooltipOf` + `TooltipLayer`, `Toast`, `Banner` |
@@ -308,8 +326,7 @@ gogui/
 │   ├── text/       opentype rasterization, atlas, metrics, emoji
 │   ├── win32/      Win32 + WGL bindings (purego), WebView2, Media Foundation
 │   └── geom/       geometry primitives
-├── cmd/demo/       minimal sample
-├── cmd/gallery/    full component gallery (8 cases)
+├── cmd/gallery/    full component gallery (8 category pages, in-page tabs)
 └── tools/          fonttest / atlasdump / layouttest
 ```
 
@@ -335,7 +352,7 @@ Set `ui.Options.DumpLayout = "layout.txt"` to export the first frame's layout tr
 ## Known limitations
 
 - No rich text (inline mixing, image wrapping) or vertical text yet
-- No virtualized list widget (paginate manually)
+- Image nodes stretch to their target box (no cover cropping); use same-ratio art or a gradient placeholder for covers
 - Video decoding relies on external `ffmpeg` / `ffprobe` (subprocess; high-res software decode is CPU heavy)
 - The embedded WebView is HWND-hosted in default mode (A), so web pixels cannot be covered by menus; the experimental DirectComposition mode (B, `GOGUI_COMPOSE=1`) composites them in the same tree
 

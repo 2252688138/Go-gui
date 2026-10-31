@@ -1,5 +1,3 @@
-//go:build windows
-
 // Go-gui
 // Author  : Mr.Shu
 // Website : www.cq6k.com

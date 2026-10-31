@@ -34,6 +34,22 @@ var (
 	RegCloseKey      func(hkey uintptr) int32
 )
 
+// ---- 物理内存回收 ----
+
+// TrimWorkingSet 把本进程工作集里可回收的物理页尽量还给系统。
+//
+// SetProcessWorkingSetSize(h, -1, -1) 的语义是「让系统自行决定工作集大小」：
+// 可回收页被换出，下次访问时再按需调回 —— 只影响「物理内存常驻量」，
+// 不改变任何逻辑与画面内容，也不会丢数据。
+// 对 GL 驱动与大块纹理的常驻页效果最明显，适合窗口最小化/长时间闲置时调用。
+func TrimWorkingSet() {
+	if SetProcessWorkingSetSize == nil || GetCurrentProcess == nil {
+		return
+	}
+	const sizeMax = ^uintptr(0)
+	SetProcessWorkingSetSize(GetCurrentProcess(), sizeMax, sizeMax)
+}
+
 // ---- 窗口置顶 ----
 
 // SetAlwaysOnTop 设置窗口是否置顶（HWND_TOPMOST / HWND_NOTOPMOST）。
@@ -55,7 +71,7 @@ func (w *Window) AlwaysOnTop() bool { return w != nil && w.topmost }
 // ---- 全局热键 ----
 
 var (
-	hotkeyMu     = map[uintptr]map[int32]func(){}
+	hotkeyMu           = map[uintptr]map[int32]func(){}
 	hotkeyNextID int32 = 100
 )
 

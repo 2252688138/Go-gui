@@ -14,9 +14,10 @@
 package text
 
 import (
+	"fmt"
 	"image/color"
 	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"unicode"
 
@@ -54,7 +55,7 @@ type Font struct {
 	measure map[string]float32
 	face    font.Face
 	// fallback 主字体缺字形时的后备字体（Symbol / Emoji 单色轮廓）
-	fallback font.Face
+	fallback     font.Face
 	fallbackName string
 	// emoji 彩色光栅器（GDI，懒创建）
 	emoji *gdiFont
@@ -140,6 +141,29 @@ func (f *Font) growAtlas(dim int) {
 	f.dirtyX0, f.dirtyY0, f.dirtyX1, f.dirtyY1 = 0, 0, 0, 0
 }
 
+// warnCJKOnce 只提示一次：字体加载路径每帧都可能触发，日志不能刷屏。
+var warnCJKOnce sync.Once
+
+// warnMissingCJK 主字体不含中日韩字形时提示一次。
+//
+// 典型场景：容器 / WSL 的 Ubuntu 默认不装 CJK 字体，表现为「英文正常、中文全空白」。
+// 这里探测 '中' 的字形索引，给出可执行的修复方式，避免误判为渲染 bug。
+func warnMissingCJK(sf *sfnt.Font) {
+	if sf == nil {
+		return
+	}
+	var buf sfnt.Buffer
+	if idx, err := sf.GlyphIndex(&buf, '中'); err == nil && idx != 0 {
+		return
+	}
+	warnCJKOnce.Do(func() {
+		fmt.Fprint(os.Stderr,
+			"[gogui] 警告：当前主字体缺少中日韩字形，中文会显示为空白。\n"+
+				"  修复：安装中文字体（Debian/Ubuntu: apt install fonts-noto-cjk），\n"+
+				"        或用环境变量指定字体文件：GOGUI_FONT_FILE=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc\n")
+	})
+}
+
 // buildFace 按当前字号与 DPI 重建 opentype face。
 func (f *Font) buildFace() {
 	px := f.Size * f.scale
@@ -147,6 +171,7 @@ func (f *Font) buildFace() {
 		px = 1
 	}
 	if sf, err := loadSystemFont(f.Face, f.Weight); err == nil {
+		warnMissingCJK(sf)
 		if face, err := opentype.NewFace(sf, &opentype.FaceOptions{
 			Size:    float64(px),
 			DPI:     72,
@@ -166,17 +191,21 @@ func (f *Font) buildFace() {
 		f.LineHeight = f.Size * 1.4
 	}
 
-	// 后备字体：Segoe UI Symbol（覆盖符号/箭头/部分 emoji 轮廓）
+	// 后备字体：平台符号字体（覆盖符号/箭头/部分 emoji 轮廓）。
+	// Windows 是 Segoe UI Symbol，Linux 是 DejaVu Sans，macOS 是 Apple Symbols——
+	// 以前硬编码成 "Segoe UI Symbol"，非 Windows 平台永远加载失败，后备字体形同虚设。
 	if f.fallbackName == "" {
-		f.fallbackName = "Segoe UI Symbol"
+		f.fallbackName = platformSymbolFamily()
 	}
-	if sf, err := loadSystemFont(f.fallbackName, f.Weight); err == nil {
-		if face, err := opentype.NewFace(sf, &opentype.FaceOptions{
-			Size:    float64(px),
-			DPI:     72,
-			Hinting: font.HintingNone,
-		}); err == nil {
-			f.fallback = face
+	if f.fallbackName != "" {
+		if sf, err := loadSystemFont(f.fallbackName, f.Weight); err == nil {
+			if face, err := opentype.NewFace(sf, &opentype.FaceOptions{
+				Size:    float64(px),
+				DPI:     72,
+				Hinting: font.HintingNone,
+			}); err == nil {
+				f.fallback = face
+			}
 		}
 	}
 	if f.emoji != nil {
@@ -619,47 +648,24 @@ var (
 	sysFonts   = map[string]*sfnt.Font{}
 )
 
-// fontCandidates 返回候选字体文件与偏好的家族名片段。
+// fontCandidates 返回候选字体文件（路径有序，前面的优先）。
+//
+// GOGUI_FONT_FILE 可直接指定主字体文件，优先级最高：
+// 容器/WSL 里系统没装中文字体时（表现为「英文正常、中文全空白」），
+// 用它指向任意 ttc/ttf（如 WSLg 下的 /mnt/c/Windows/Fonts/msyh.ttc）即可，无需改系统。
+//
+// 平台差异全部收敛在 platformFontCandidates / platformDefaultFontCandidates 里：
+//   - Windows：按文件名猜 %WINDIR%\Fonts 下的字体；
+//   - Linux/macOS/Android/iOS：扫描系统字体目录并按关键词匹配；
+//   - 浏览器：查 Web 运行时注册进来的字体表。
 func fontCandidates(faceName string, weight int32) []string {
+	if p := strings.TrimSpace(os.Getenv("GOGUI_FONT_FILE")); p != "" {
+		return []string{p}
+	}
 	if p := platformFontCandidates(faceName, weight); len(p) > 0 {
 		return p
 	}
-	bold := weight >= 600
-	dir := os.Getenv("WINDIR")
-	if dir == "" {
-		dir = `C:\Windows`
-	}
-	fonts := filepath.Join(dir, "Fonts")
-	name := faceName
-	switch {
-	case name == "" || containsAny(name, "雅黑", "YaHei", "Microsoft YaHei"):
-		if bold {
-			return []string{filepath.Join(fonts, "msyhbd.ttc"), filepath.Join(fonts, "msyh.ttc"), filepath.Join(fonts, "segoeuib.ttf")}
-		}
-		return []string{filepath.Join(fonts, "msyh.ttc"), filepath.Join(fonts, "segoeui.ttf")}
-	case containsAny(name, "宋体", "SimSun"):
-		return []string{filepath.Join(fonts, "simsun.ttc"), filepath.Join(fonts, "msyh.ttc")}
-	case containsAny(name, "黑体", "SimHei"):
-		return []string{filepath.Join(fonts, "simhei.ttf"), filepath.Join(fonts, "msyh.ttc")}
-	case containsAny(name, "Symbol", "symbol"):
-		return []string{filepath.Join(fonts, "seguisym.ttf"), filepath.Join(fonts, "segoeui.ttf")}
-	case containsAny(name, "Emoji", "emoji"):
-		return []string{filepath.Join(fonts, "seguiemj.ttf"), filepath.Join(fonts, "seguisym.ttf")}
-	case containsAny(name, "Consolas", "Mono", "mono"):
-		if bold {
-			return []string{filepath.Join(fonts, "consolab.ttf"), filepath.Join(fonts, "consola.ttf")}
-		}
-		return []string{filepath.Join(fonts, "consola.ttf"), filepath.Join(fonts, "msyh.ttc")}
-	case containsAny(name, "Segoe UI", "Segoe"):
-		if bold {
-			return []string{filepath.Join(fonts, "segoeuib.ttf")}
-		}
-		return []string{filepath.Join(fonts, "segoeui.ttf")}
-	}
-	if bold {
-		return []string{filepath.Join(fonts, "msyhbd.ttc"), filepath.Join(fonts, "msyh.ttc")}
-	}
-	return []string{filepath.Join(fonts, "msyh.ttc"), filepath.Join(fonts, "segoeui.ttf")}
+	return platformDefaultFontCandidates(weight)
 }
 
 func containsAny(s string, subs ...string) bool {

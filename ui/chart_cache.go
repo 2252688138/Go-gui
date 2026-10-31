@@ -85,6 +85,25 @@ func (a *App) chartEvict(need int64) {
 	}
 }
 
+// chartReleaseAll 释放全部图表纹理，下次绘制按需重建。
+//
+// 空闲 / 最小化时调用：图表页一次会同时驻留 7 张高分辨率纹理
+// （按 superSample 倍率的平方增长，2× 时单张 600×300 就是 ~2.9MB），
+// 页面切走或窗口闲置时这些纹理没有保留价值。
+func (a *App) chartReleaseAll() {
+	if a == nil || a.r == nil {
+		return
+	}
+	for _, c := range a.chartList {
+		if c.tex != nil {
+			a.r.DeleteTexture(c.tex)
+		}
+		c.tex, c.key, c.bytes, c.w, c.h = nil, 0, 0, 0, 0
+	}
+	a.chartList = a.chartList[:0]
+	a.chartBytes = 0
+}
+
 // chartResetCache 关闭窗口时清空缓存记账（GL 资源由 Renderer.Destroy 统一释放）。
 func (a *App) chartResetCache() {
 	a.chartBytes = 0

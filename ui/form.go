@@ -135,6 +135,7 @@ func (s *SelectState) Close() {
 	}
 	s.Open = false
 	s.Hover = -1
+	CloseOverlay(s.Key + "-sel")
 }
 
 // Toggle 展开 / 收起。
@@ -289,8 +290,14 @@ func SelectBox(s *SelectState, opts []SelectOption, value, placeholder string, o
 				s.Hover = 0
 				s.move(1)
 			}
+			OpenOverlay(s.Key+"-sel", func() bool {
+				s.Close()
+				RequestRedraw()
+				return true
+			})
 		} else {
 			s.Hover = -1
+			CloseOverlay(s.Key + "-sel")
 		}
 		RequestRedraw()
 	}
@@ -310,10 +317,10 @@ func suffixHint(opts []SelectOption, value string) string {
 
 // 下拉浮层几何（绘制与命中一致）。
 const (
-	selectRowH  float32 = 30
-	selectMaxH  float32 = 240
-	selectMinW  float32 = 160
-	selectPadY  float32 = 6
+	selectRowH float32 = 30
+	selectMaxH float32 = 240
+	selectMinW float32 = 160
+	selectPadY float32 = 6
 )
 
 // SelectLayers 渲染所有展开的下拉浮层（放在根 Stack 末尾）。
@@ -383,7 +390,7 @@ func selectPanel(s *SelectState) *Node {
 	}
 	body := Column(rows...).St(St().GapOf(2))
 	if listH > selectMaxH {
-		body = Column(Scroll(rows...).K(s.Key+"-opt").St(St().H(selectMaxH - selectPadY*2))).
+		body = Column(Scroll(rows...).K(s.Key + "-opt").St(St().H(selectMaxH - selectPadY*2))).
 			St(St().W(w - selectPadY*2))
 		if s.Open {
 			RequestRedraw() // 浮层内含滚动状态，保持帧推进
@@ -518,7 +525,7 @@ func Textarea(key, value, placeholder string, height float32, onChange func(stri
 				Text(string(ln[:c])).St(St().Text(13, 400, ColText)),
 				Box().St(St().W(1.5).H(16).BgC(ColPrimary).MarXY(0.5, 0)),
 				Text(string(ln[c:])).St(St().Text(13, 400, ColText)),
-			).St(St().H(lineH).AnimOn()).AlignTo(AlignCenter)
+			).St(St().H(lineH).AnimSlowOn()).AlignTo(AlignCenter)
 		} else {
 			txt := string(ln)
 			if txt == "" {
@@ -789,9 +796,9 @@ func DateField(label, value string) *Node {
 
 // DateState 日历浮层状态。
 type DateState struct {
-	Key  string
-	Open bool
-	Y, M int // 面板当前显示的年月
+	Key   string
+	Open  bool
+	Y, M  int // 面板当前显示的年月
 	Value string
 
 	onChange func(string)
@@ -838,6 +845,13 @@ func DateBox(s *DateState, value string, onChange func(string)) *Node {
 					o.Open = false
 				}
 			}
+			OpenOverlay(s.Key+"-date", func() bool {
+				s.Open = false
+				RequestRedraw()
+				return true
+			})
+		} else {
+			CloseOverlay(s.Key + "-date")
 		}
 		RequestRedraw()
 	}
@@ -897,11 +911,11 @@ func datePanel(s *DateState) *Node {
 		return nil
 	}
 	const (
-		cellW  = float32(34)
-		cellH  = float32(28)
-		padX   = float32(10)
-		padY   = float32(8)
-		weeks  = 6
+		cellW = float32(34)
+		cellH = float32(28)
+		padX  = float32(10)
+		padY  = float32(8)
+		weeks = 6
 	)
 	w := cellW*7 + padX*2
 	y0, m0 := s.Y, s.M
@@ -962,6 +976,7 @@ func datePanel(s *DateState) *Node {
 		cell.K(fmt.Sprintf("%s-day-%04d%02d%02d", s.Key, cy, cm, cd)).Tap(func() {
 			s.Value = fmt.Sprintf("%04d-%02d-%02d", cy, cm, cd)
 			s.Open = false
+			CloseOverlay(s.Key + "-date")
 			if s.onChange != nil {
 				s.onChange(s.Value)
 			}

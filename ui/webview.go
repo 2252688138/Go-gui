@@ -62,24 +62,38 @@ func NewWebView(opts WebViewOptions) (*WebView, error) {
 	return NewWebViewIn(currentApp.Load(), opts)
 }
 
+// compositorOf 取当前窗口的 DirectComposition 合成器（未启用时为 nil）。
+// Backend 接口不暴露平台类型，这里通过可选接口断言回到 *win32.Compositor。
+func compositorOf(a *App) *win32.Compositor {
+	if a == nil || a.win == nil {
+		return nil
+	}
+	cb, ok := a.win.(composerBackend)
+	if !ok {
+		return nil
+	}
+	c, _ := cb.Compositor().(*win32.Compositor)
+	return c
+}
+
 // NewWebViewIn 在指定窗口创建内嵌浏览器。
 func NewWebViewIn(a *App, opts WebViewOptions) (*WebView, error) {
 	if a == nil {
 		return nil, errors.New("ui: 没有活动窗口，无法创建 WebView")
 	}
 	var compRoot uintptr
-	if a.win.comp != nil {
-		if v, verr := a.win.comp.NewVisual(); verr == nil {
+	if comp := compositorOf(a); comp != nil {
+		if v, verr := comp.NewVisual(); verr == nil {
 			compRoot = v
 		}
 	}
 	core, err := win32.NewWebView2(win32.WebView2Options{
-		Parent:      a.HWND(),
-		URL:         opts.URL,
-		HTML:        opts.HTML,
-		UserDataDir: opts.UserDataDir,
-		Zoom:        opts.Zoom,
-		Transparent: opts.Transparent,
+		Parent:          a.HWND(),
+		URL:             opts.URL,
+		HTML:            opts.HTML,
+		UserDataDir:     opts.UserDataDir,
+		Zoom:            opts.Zoom,
+		Transparent:     opts.Transparent,
 		CompositionRoot: compRoot,
 		OnChange: func() {
 			a.Invalidate()
@@ -513,22 +527,22 @@ func (a *App) syncWebViews() {
 		y := int32(math.Round(float64(r.Y * scale)))
 		w := int32(math.Round(float64(r.W * scale)))
 		h := int32(math.Round(float64(r.H * scale)))
-		if wv.compose && a.win.comp != nil {
-// B 阶段：网页是 DComp 图层——位置由视觉偏移决定，bounds 从 (0,0) 起算，
-// 圆角交给 IDCompositionRectangleClip（抗锯齿），不再用窗口区域硬裁。
-a.win.comp.SetVisualOffset(wv.compVisual, r.X*scale, r.Y*scale)
-wv.core.SetBounds(0, 0, w, h)
-wv.core.SetVisible(true)
-if wv.radius > 0 {
-_ = a.win.comp.SetRoundedClip(wv.compVisual, 0, 0, float32(w), float32(h), wv.radius*scale)
-}
-} else {
-wv.core.SetBounds(x, y, w, h)
-wv.core.SetVisible(true)
-if wv.radius > 0 {
-wv.core.SetRoundedRegion(int32(math.Round(float64(wv.radius * scale))))
-}
-}
+		if comp := compositorOf(a); wv.compose && comp != nil {
+			// B 阶段：网页是 DComp 图层——位置由视觉偏移决定，bounds 从 (0,0) 起算，
+			// 圆角交给 IDCompositionRectangleClip（抗锯齿），不再用窗口区域硬裁。
+			comp.SetVisualOffset(wv.compVisual, r.X*scale, r.Y*scale)
+			wv.core.SetBounds(0, 0, w, h)
+			wv.core.SetVisible(true)
+			if wv.radius > 0 {
+				_ = comp.SetRoundedClip(wv.compVisual, 0, 0, float32(w), float32(h), wv.radius*scale)
+			}
+		} else {
+			wv.core.SetBounds(x, y, w, h)
+			wv.core.SetVisible(true)
+			if wv.radius > 0 {
+				wv.core.SetRoundedRegion(int32(math.Round(float64(wv.radius * scale))))
+			}
+		}
 		wv.visible = true
 		if a.wvShown == nil {
 			a.wvShown = map[*WebView]bool{}

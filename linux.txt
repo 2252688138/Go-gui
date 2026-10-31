@@ -1,0 +1,6 @@
+# 进 WSL 后（DISPLAY 由 WSLg 自动设置）
+cd /mnt/h/JIMaX/gogui
+bash .zym/linux/test_linux.sh /mnt/h/JIMaX/gogui/dist/gogui-linux-amd64
+
+wsl.exe -d Ubuntu
+启动 linux

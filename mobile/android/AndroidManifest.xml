@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GoGUI Android 示例工程（NativeActivity 模式，没有 Java 代码）
+  - android:hasCode="false"：App 里没有 DEX，逻辑全在 libgogui.so
+  - meta-data android.app.lib_name：系统据此加载 libgogui.so 并调用
+    ANativeActivity_onCreate
+  - 想改成"有 Java 壳"（需要软键盘、文件选择器等 JNI 能力）时，把 hasCode 改为 true
+    并继承 android.app.NativeActivity 自己实现 JNI 桥
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gogui.app"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
+
+    <!-- OpenGL ES 3.0 是硬性要求（渲染器用 GLSL ES 300） -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <application
+        android:label="GoGUI"
+        android:hasCode="false"
+        android:hardwareAccelerated="true">
+
+        <activity
+            android:name="android.app.NativeActivity"
+            android:label="GoGUI"
+            android:configChanges="orientation|keyboardHidden|screenSize|density|uiMode"
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
+            android:exported="true">
+            <meta-data android:name="android.app.lib_name" android:value="gogui" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

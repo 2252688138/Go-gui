@@ -34,6 +34,15 @@ const (
 	EvDropFiles
 	// 全局热键命中，HotkeyID 为注册时给的 id
 	EvHotkey
+	// 以下为多端新增（与 internal/display 的 EventType 逐项对应，必须追加在末尾）：
+	// 触摸/手写笔。同时会合成为鼠标事件，遗留代码可忽略。
+	EvTouchDown
+	EvTouchMove
+	EvTouchUp
+	// EvTextInput 软键盘一次上屏的多字符文本（Event.Text）
+	EvTextInput
+	// EvBack 返回键或返回手势（Android 实体键 / iOS 边缘手势）
+	EvBack
 )
 
 // Event 一个输入事件（坐标均为逻辑像素）。
@@ -52,21 +61,27 @@ type Event struct {
 	Text  string
 	Caret int
 
+	// Pointer 指针类型：0 = 鼠标，1 = 触摸/手写笔（移动端）。
+	Pointer int
+
 	Paths    []string
 	HotkeyID int
 }
 
 // 常用虚拟键码（与 Windows VK_* 一致）。
 const (
-	VK_BACK   = 0x08
-	VK_TAB    = 0x09
-	VK_RETURN = 0x0D
-	VK_SHIFT  = 0x10
-	VK_ESCAPE = 0x1B
-	VK_SPACE  = 0x20
-	VK_LEFT   = 0x25
-	VK_UP     = 0x26
-	VK_RIGHT  = 0x27
-	VK_DOWN   = 0x28
-	VK_DELETE = 0x2E
+	VK_BACK    = 0x08
+	VK_TAB     = 0x09
+	VK_RETURN  = 0x0D
+	VK_SHIFT   = 0x10
+	VK_CONTROL = 0x11
+	VK_MENU    = 0x12
+	VK_ESCAPE  = 0x1B
+	VK_SPACE   = 0x20
+	VK_LEFT    = 0x25
+	VK_UP      = 0x26
+	VK_RIGHT   = 0x27
+	VK_DOWN    = 0x28
+	VK_DELETE  = 0x2E
+	VK_F11     = 0x7A
 )

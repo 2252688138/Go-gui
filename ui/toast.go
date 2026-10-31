@@ -22,9 +22,10 @@ const ToastDefaultSeconds float32 = 2
 
 // toastState 当前轻提示状态（UI 线程独占，无需加锁）。
 var toastState struct {
-	msg string
-	at  float32 // 本次显示的开始时刻（AnimTime 秒）
-	dur float32 // 本次显示时长（秒）
+	msg  string
+	last string  // 上一条（退出动画期间继续渲染）
+	at   float32 // 本次显示的开始时刻（AnimTime 秒）
+	dur  float32 // 本次显示时长（秒）
 }
 
 // ToastShow 显示一条轻提示，默认 ToastDefaultSeconds 秒后自动隐藏；msg 为空等同 ToastHide。
@@ -60,17 +61,34 @@ func ToastVisible() bool {
 	return toastState.msg != "" && AnimTime()-toastState.at < toastState.dur
 }
 
-// ToastLayer 渲染当前轻提示；到点后自动隐藏并返回 nil。
+// ToastLayer 渲染当前轻提示（带淡入淡出）；到点后播完退出动画再消失。
 // 显示期间每帧请求重绘，保证计时到点即消失（与 Markdown 复制提示同一套做法）。
 func ToastLayer() *Node {
 	msg := toastState.msg
+	live := msg != ""
+	if live && AnimTime()-toastState.at >= toastState.dur {
+		toastState.last = msg
+		toastState.msg = ""
+		live = false
+	}
+	if !live {
+		msg = toastState.last
+	}
 	if msg == "" {
 		return nil
 	}
-	if AnimTime()-toastState.at >= toastState.dur {
-		toastState.msg = ""
+	visible, t := KeepAlive("toast", live, 0.16)
+	if !visible {
+		toastState.last = ""
 		return nil
 	}
-	RequestRedraw()
-	return Toast(msg)
+	if live {
+		RequestRedraw()
+	}
+	_, dy := PopOffset(t)
+	n := Toast(msg)
+	if n == nil {
+		return nil
+	}
+	return n.St(St().Fade(0.2+0.8*t).Translate(0, dy))
 }

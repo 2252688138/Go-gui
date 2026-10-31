@@ -342,11 +342,11 @@ type WebView2 struct {
 	mu        sync.Mutex
 	callbacks []uintptr
 	// inner 网页绘图子窗口（Chromium 窗口），inner* 记录当前区域参数
-	inner       uintptr
-	comp        uintptr // ICoreWebView2CompositionController（B 阶段）
-	compRoot    uintptr
+	inner          uintptr
+	comp           uintptr // ICoreWebView2CompositionController（B 阶段）
+	compRoot       uintptr
 	innerW, innerH int32
-	innerRadius int32
+	innerRadius    int32
 }
 
 var (
@@ -939,18 +939,18 @@ func (wv *WebView2) Close() {
 // WebView2 的 HWND 托管会在宿主里生成一个 Chromium 子窗口，网页就画在它上面。
 // 对它 SetWindowRgn 可以得到真正的圆角裁剪（不是盖一层背景遮出来的伪圆角）。
 type wvInner struct {
-	hwnd uintptr
-	w, h int32
+	hwnd   uintptr
+	w, h   int32
 	radius int32
 }
 
 var (
-	user32Lazy   = syscall.NewLazyDLL("user32.dll")
+	user32Lazy    = syscall.NewLazyDLL("user32.dll")
 	procEnumChild = user32Lazy.NewProc("EnumChildWindows")
-	procGetClass   = user32Lazy.NewProc("GetClassNameW")
-	procGetClient  = user32Lazy.NewProc("GetClientRect")
-	procSetRgn     = user32Lazy.NewProc("SetWindowRgn")
-	procDeleteObj  = user32Lazy.NewProc("DeleteObject")
+	procGetClass  = user32Lazy.NewProc("GetClassNameW")
+	procGetClient = user32Lazy.NewProc("GetClientRect")
+	procSetRgn    = user32Lazy.NewProc("SetWindowRgn")
+	procDeleteObj = user32Lazy.NewProc("DeleteObject")
 )
 
 // findInnerWindow 在宿主窗口里找 Chromium 的绘图子窗口（类名含 Chrome_WidgetWin）。
@@ -1046,68 +1046,68 @@ func boolPtr(v bool) uintptr {
 // startComposition 创建「合成控制器」并把网页挂到指定 DComp 视觉（B 阶段）。
 // 失败时返回 false，调用方回退 HWND 托管（A 阶段）。
 func (wv *WebView2) startComposition(env uintptr) bool {
-iidEnv3 := parseGUID("80a22ae3-be7c-4ce2-afe1-5a50056cdeeb")
-var env3 uintptr
-if hr := comCall(env, 0, uintptr(unsafe.Pointer(&iidEnv3)), uintptr(unsafe.Pointer(&env3))); comFail(hr) || env3 == 0 {
-return false
-}
-handler := newWVCallback(func(this, hr, comp uintptr) uintptr {
-if comFail(uint32(hr)) || comp == 0 {
-wv.setErr(fmt.Errorf("创建合成控制器失败（0x%08x），回退 A 阶段", uint32(hr)))
-return 0
-}
-wv.attachComposition(comp)
-return 0
-})
-wv.mu.Lock()
-wv.callbacks = append(wv.callbacks, handler)
-wv.mu.Unlock()
-if hr := comCall(env3, wvEnvCompCreate, wv.parent, handler); comFail(hr) {
-return false
-}
-return true
+	iidEnv3 := parseGUID("80a22ae3-be7c-4ce2-afe1-5a50056cdeeb")
+	var env3 uintptr
+	if hr := comCall(env, 0, uintptr(unsafe.Pointer(&iidEnv3)), uintptr(unsafe.Pointer(&env3))); comFail(hr) || env3 == 0 {
+		return false
+	}
+	handler := newWVCallback(func(this, hr, comp uintptr) uintptr {
+		if comFail(uint32(hr)) || comp == 0 {
+			wv.setErr(fmt.Errorf("创建合成控制器失败（0x%08x），回退 A 阶段", uint32(hr)))
+			return 0
+		}
+		wv.attachComposition(comp)
+		return 0
+	})
+	wv.mu.Lock()
+	wv.callbacks = append(wv.callbacks, handler)
+	wv.mu.Unlock()
+	if hr := comCall(env3, wvEnvCompCreate, wv.parent, handler); comFail(hr) {
+		return false
+	}
+	return true
 }
 
 // attachComposition 合成控制器就绪：设置 RootVisualTarget，取 UiController 后复用通用接入流程。
 func (wv *WebView2) attachComposition(comp uintptr) {
-root := wv.opts.CompositionRoot
-if hr := comCall(comp, wvCompPutRoot, root); comFail(hr) {
-wv.setErr(fmt.Errorf("put_RootVisualTarget 失败（0x%08x）", hr))
-return
-}
-wv.mu.Lock()
-wv.comp, wv.compRoot = comp, root
-wv.mu.Unlock()
+	root := wv.opts.CompositionRoot
+	if hr := comCall(comp, wvCompPutRoot, root); comFail(hr) {
+		wv.setErr(fmt.Errorf("put_RootVisualTarget 失败（0x%08x）", hr))
+		return
+	}
+	wv.mu.Lock()
+	wv.comp, wv.compRoot = comp, root
+	wv.mu.Unlock()
 
-// ICoreWebView2CompositionController2::get_UiController
-iidCC2 := parseGUID("0b6a3d24-49cb-4806-ba20-b5e0734a7b26")
-var cc2 uintptr
-if hr := comCall(comp, 0, uintptr(unsafe.Pointer(&iidCC2)), uintptr(unsafe.Pointer(&cc2))); comFail(hr) || cc2 == 0 {
-wv.setErr(fmt.Errorf("取 CompositionController2 失败（0x%08x）", hr))
-return
-}
-var ui uintptr
-if hr := comCall(cc2, wvCompGetUI, uintptr(unsafe.Pointer(&ui))); comFail(hr) || ui == 0 {
-wv.setErr(fmt.Errorf("取 UiController 失败（0x%08x）", hr))
-return
-}
-comRelease(cc2)
-wv.attach(ui)
+	// ICoreWebView2CompositionController2::get_UiController
+	iidCC2 := parseGUID("0b6a3d24-49cb-4806-ba20-b5e0734a7b26")
+	var cc2 uintptr
+	if hr := comCall(comp, 0, uintptr(unsafe.Pointer(&iidCC2)), uintptr(unsafe.Pointer(&cc2))); comFail(hr) || cc2 == 0 {
+		wv.setErr(fmt.Errorf("取 CompositionController2 失败（0x%08x）", hr))
+		return
+	}
+	var ui uintptr
+	if hr := comCall(cc2, wvCompGetUI, uintptr(unsafe.Pointer(&ui))); comFail(hr) || ui == 0 {
+		wv.setErr(fmt.Errorf("取 UiController 失败（0x%08x）", hr))
+		return
+	}
+	comRelease(cc2)
+	wv.attach(ui)
 }
 
 // SendMouseInput 把鼠标事件转发给网页（B 阶段没有子窗口，必须自己转）。
 // kind: 0=HOVER 1=LEAVE 2=LEFTDOWN 3=LEFTUP 4=RIGHTDOWN 5=RIGHTUP 6=WHEEL
 func (wv *WebView2) SendMouseInput(kind int, vkeys uint32, wheel int32, x, y int32) {
-if wv == nil {
-return
-}
-wv.mu.Lock()
-comp := wv.comp
-wv.mu.Unlock()
-if comp == 0 {
-return
-}
-type pt32 struct{ X, Y int32 }
+	if wv == nil {
+		return
+	}
+	wv.mu.Lock()
+	comp := wv.comp
+	wv.mu.Unlock()
+	if comp == 0 {
+		return
+	}
+	type pt32 struct{ X, Y int32 }
 	p := pt32{X: x, Y: y}
-comCall(comp, wvCompSendMouse, uintptr(kind), uintptr(vkeys), uintptr(uint32(wheel)), uintptr(unsafe.Pointer(&p)))
+	comCall(comp, wvCompSendMouse, uintptr(kind), uintptr(vkeys), uintptr(uint32(wheel)), uintptr(unsafe.Pointer(&p)))
 }

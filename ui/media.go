@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows || ((linux || freebsd) && !android)
 
 // Go-gui
 // Author  : Mr.Shu
@@ -20,10 +20,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
-	"gogui/internal/win32"
+	"gogui/internal/audio"
 )
 
 // 媒体解码：GoGUI 自身不做编解码，而是调用外部 ffmpeg 子进程把任意容器解成
@@ -264,20 +263,6 @@ func ProbeMediaWith(path, ffprobe string) (*MediaInfo, error) {
 
 // ---- 工具函数 ----
 
-// toolPath 定位外部工具：显式路径 > PATH。
-func toolPath(explicit, name string) string {
-	if explicit != "" {
-		return explicit
-	}
-	if p, err := exec.LookPath(name); err == nil {
-		return p
-	}
-	if p, err := exec.LookPath(name + ".exe"); err == nil {
-		return p
-	}
-	return ""
-}
-
 // isRemotePath 是否远端链接。
 func isRemotePath(p string) bool {
 	lp := strings.ToLower(p)
@@ -287,17 +272,6 @@ func isRemotePath(p string) bool {
 		}
 	}
 	return false
-}
-
-// hideConsole 隐藏子进程控制台窗口（发布构建下不闪黑框）。
-func hideConsole(cmd *exec.Cmd) {
-	if cmd == nil {
-		return
-	}
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.HideWindow = true
 }
 
 // firstLines 取前 n 行非空文本（错误提示用）。
@@ -405,7 +379,7 @@ type MediaSource struct {
 	frames     []mediaFrame
 	vcmd       *exec.Cmd
 	acmd       *exec.Cmd
-	audio      *win32.AudioOut
+	audio      audio.Device
 	audioOn    bool
 	audioDevOn bool
 	speed      float64
@@ -421,13 +395,13 @@ type MediaSource struct {
 	previewBusy  bool
 	previewWant  time.Duration
 	previewHas   bool
-	lastOpen    time.Time
-	closed      bool
-	eof         bool
-	err         error
+	lastOpen     time.Time
+	closed       bool
+	eof          bool
+	err          error
 
 	// 系统解码器后端（没装 ffmpeg 时使用；为 nil 表示 ffmpeg 路径）
-	sys *win32.MFSourceReader
+	sys sysSource
 	// sysWG 跟踪系统解码协程，关闭前等待退出（避免归还 reader 后仍在调用）
 	sysWG sync.WaitGroup
 }
@@ -500,7 +474,7 @@ func OpenMediaWith(path string, cfg MediaConfig) (*MediaSource, error) {
 		if vol <= 0 {
 			vol = 1
 		}
-		if a, err := win32.NewAudioOut(48000, 2, 8, 2048); err == nil {
+		if a, err := audio.Open(48000, 2, 8, 2048); err == nil {
 			s.audio = a
 			s.audioDevOn = true
 			a.SetVolume(vol)

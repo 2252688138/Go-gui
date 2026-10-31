@@ -11,6 +11,14 @@ import "gogui/internal/win32"
 
 // ---- 文件对话框 ----
 
+// RunAsync 在后台 goroutine 执行 fn（Windows 端解码/探测这类阻塞工作放后台，
+// 完成后用 App.Post 回 UI 线程）。浏览器端实现见 platform_wasm.go。
+func RunAsync(fn func()) {
+	if fn != nil {
+		go fn()
+	}
+}
+
 // OpenFileDialog 打开文件对话框。filter 形如 "图片|*.png;*.jpg|所有文件|*.*"。
 func OpenFileDialog(title, filter string) (string, bool) {
 	var hwnd uintptr
@@ -40,6 +48,23 @@ func PickFolderDialog(title string) (string, bool) {
 
 // ShellOpen 用系统默认程序打开路径/网址。
 func ShellOpen(path string) { win32.ShellOpen(path) }
+
+// PickFile 选单个文件（桌面端同步实现，选完立即回调）。
+func PickFile(title, filter string, onPick func(path string)) {
+	if p, ok := OpenFileDialog(title, filter); ok && onPick != nil {
+		onPick(p)
+	}
+}
+
+// PickFilesAsync 选多个文件（桌面端同步实现，选完立即回调）。
+func PickFilesAsync(title, filter string, onPick func(paths []string)) {
+	if ps, ok := PickFiles(title, filter); ok && onPick != nil {
+		onPick(ps)
+	}
+}
+
+// StartupQuery 读取启动参数：桌面端没有 URL，恒返回空串（Web 端实现见 platform_wasm.go）。
+func StartupQuery(key string) string { return "" }
 
 // ---- 托盘 ----
 

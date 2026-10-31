@@ -1,5 +1,3 @@
-//go:build windows
-
 // Go-gui
 // Author  : Mr.Shu
 // Website : www.cq6k.com
@@ -13,18 +11,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"gogui/internal/win32"
 )
+
+// 系统能力（平台无关部分）：文件拖入区域、路径展示、置顶、热键、拖入回调等
+// 纯逻辑组件放在这里；真正落到系统 API 的部分（剪贴板、文件对话框、托盘、
+// 休眠抑制、回收站、深色模式检测）在 system_win32.go / system_unix.go / platform_*.go。
 
 // ---- 文件拖入（DROP）----
 //
-// 链路：窗口 DragAcceptFiles 注册 → 系统在松手时投递 WM_DROPFILES →
-// win32 取出 HDROP 里的路径与落点 → App 在下一帧用落点命中节点树 →
-// 最近的设置了 OnDrop 的节点优先，否则交给应用级回调。
-//
-// 说明：WM_DROPFILES 只在「松手」时到达，没有 dragenter/dragover 过程，
-// 因此不存在悬停高亮；需要悬停高亮得改用 OLE IDropTarget，本框架未提供。
+// 链路：窗口层注册接收拖入 → 系统在松手时投递事件 → App 在下一帧用落点命中
+// 节点树 → 最近的设置了 OnDrop 的节点优先，否则交给应用级回调。
 
 // SetOnDropFiles 给当前所有窗口设置应用级文件拖入回调。
 // x/y 为落下点（逻辑像素，客户区坐标）；拖到没有 OnDrop 的区域时才触发。
@@ -126,26 +122,6 @@ func FileRow(path string, onClick func()) *Node {
 	return n
 }
 
-// PickFiles 打开多选文件对话框（filter 形如 "图片|*.png;*.jpg|所有文件|*.*"）。
-func PickFiles(title, filter string) ([]string, bool) {
-	var hwnd uintptr
-	if a := currentApp.Load(); a != nil {
-		hwnd = a.HWND()
-	}
-	return win32.OpenFiles(hwnd, title, filter)
-}
-
-// ---- 剪贴板 ----
-
-// ClipboardText 读取剪贴板文本（无文本返回空串）。
-func ClipboardText() string { return win32.GetClipboardText() }
-
-// ClipboardSetText 写入剪贴板文本。
-func ClipboardSetText(s string) bool { return win32.SetClipboardText(s) }
-
-// ClipboardSetFiles 把文件路径列表写入剪贴板（CF_HDROP，可直接粘贴到资源管理器）。
-func ClipboardSetFiles(paths []string) bool { return win32.SetClipboardFiles(paths) }
-
 // ---- 窗口 ----
 
 // SetAlwaysOnTop 窗口置顶 / 取消置顶。
@@ -164,17 +140,18 @@ func IsAlwaysOnTop() bool {
 }
 
 // 全局热键修饰键（RegisterHotkey 的 mods 参数）。
+// 数值与 Win32 的 MOD_* 一致，因此同一份配置在所有平台含义相同。
 const (
-	HotAlt      = win32.MOD_ALT
-	HotCtrl     = win32.MOD_CONTROL
-	HotShift    = win32.MOD_SHIFT
-	HotWin      = win32.MOD_WIN
-	HotNoRepeat = win32.MOD_NOREPEAT
+	HotAlt      = 0x0001
+	HotCtrl     = 0x0002
+	HotShift    = 0x0004
+	HotWin      = 0x0008
+	HotNoRepeat = 0x4000
 )
 
 // RegisterHotkey 注册系统级热键（窗口最小化/失焦时同样触发）。
 // vk 为虚拟键码，字母键直接用 'S' 这样的字符。返回 id（0 表示注册失败，
-// 通常是该组合已被其它程序占用）。
+// 通常是该组合已被其它程序占用，或当前平台不支持）。
 func RegisterHotkey(mods uint32, vk uint32, fn func()) int32 {
 	if a := currentApp.Load(); a != nil {
 		return a.RegisterHotkey(mods, vk, fn)
@@ -187,30 +164,6 @@ func UnregisterHotkey(id int32) {
 	if a := currentApp.Load(); a != nil {
 		a.UnregisterHotkey(id)
 	}
-}
-
-// ---- 电源 / 资源管理器 ----
-
-// SetKeepAwake 阻止系统休眠与关屏（false = 恢复默认）。返回调用前的标志位。
-func SetKeepAwake(on bool) uint32 { return win32.KeepAwake(on) }
-
-// RevealInExplorer 在资源管理器中定位并选中给定路径。
-func RevealInExplorer(path string) bool { return win32.RevealInExplorer(path) }
-
-// MoveToRecycleBin 把文件/文件夹移入回收站（不弹确认框，可从回收站还原）。
-func MoveToRecycleBin(path string) bool { return win32.MoveToRecycleBin(path) }
-
-// SystemDarkMode 系统是否处于深色模式（读注册表 AppsUseLightTheme）。
-func SystemDarkMode() bool { return win32.SystemDarkMode() }
-
-// ---- 托盘通知 ----
-
-// Notify 在托盘图标上弹出气泡提示（title 可空）。
-func (t *Tray) Notify(title, msg string) {
-	if t == nil || t.t == nil {
-		return
-	}
-	t.t.Notify(title, msg)
 }
 
 // 小工具：把路径列表压成一行展示（超出 n 个用 … 省略）。

@@ -59,15 +59,15 @@ func openFileDialog(owner uintptr, title, filter, initialDir, defExt string, sav
 	}
 
 	ofn := OPENFILENAMEW{
-		HwndOwner:     owner,
-		LpstrFilter:   u16p(ft),
-		NFilterIndex:  1,
-		LpstrFile:     &fileBuf[0],
-		NMaxFile:      uint32(len(fileBuf)),
-		LpstrTitle:    titleP,
+		HwndOwner:       owner,
+		LpstrFilter:     u16p(ft),
+		NFilterIndex:    1,
+		LpstrFile:       &fileBuf[0],
+		NMaxFile:        uint32(len(fileBuf)),
+		LpstrTitle:      titleP,
 		LpstrInitialDir: dirP,
-		Flags:         flags,
-		LpstrDefExt:   extP,
+		Flags:           flags,
+		LpstrDefExt:     extP,
 	}
 	ofn.LStructSize = uint32(unsafe.Sizeof(ofn))
 
@@ -99,13 +99,13 @@ func OpenFiles(owner uintptr, title, filter string) ([]string, bool) {
 		titleP = u16p(t)
 	}
 	ofn := OPENFILENAMEW{
-		HwndOwner:     owner,
-		LpstrFilter:   u16p(ft),
-		NFilterIndex:  1,
-		LpstrFile:     &buf[0],
-		NMaxFile:      uint32(len(buf)),
-		LpstrTitle:    titleP,
-		Flags:         OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_ALLOWMULTISELECT,
+		HwndOwner:    owner,
+		LpstrFilter:  u16p(ft),
+		NFilterIndex: 1,
+		LpstrFile:    &buf[0],
+		NMaxFile:     uint32(len(buf)),
+		LpstrTitle:   titleP,
+		Flags:        OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_ALLOWMULTISELECT,
 	}
 	ofn.LStructSize = uint32(unsafe.Sizeof(ofn))
 	if GetOpenFileNameW(&ofn) == 0 {

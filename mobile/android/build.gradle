@@ -1,0 +1,40 @@
+// GoGUI Android 工程（最小可用，无需 Android Studio）
+//
+// 目录约定（与 build-android.ps1 对应）：
+//
+//	mobile/android/main.go                    Go 入口（编译成 libgogui.so）
+//	mobile/android/AndroidManifest.xml        清单（NativeActivity，hasCode=false）
+//	mobile/android/build.gradle               本文件
+//	dist/android/arm64-v8a/libgogui.so        由 build-android.ps1 产出
+
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.gogui.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.gogui.app"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    sourceSets {
+        main {
+            // 清单与 jniLibs 都从工程根目录取
+            manifest.srcFile 'AndroidManifest.xml'
+            jniLibs.srcDirs = ['../../dist/android']
+            java.srcDirs = []
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}

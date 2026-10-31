@@ -31,6 +31,8 @@ const (
 	KArrow
 	// KChart 图表（折线 / 面积 / 柱状 / 饼 / 环形 / 雷达 / 散点）。
 	KChart
+	// KRichText 富文本（行内混排样式 / 链接 / 行内代码）。
+	KRichText
 )
 
 // Node 声明式节点（每帧重建，交互状态按 Key 继承）。
@@ -46,20 +48,31 @@ type Node struct {
 	// Src 为图片路径（Kind == KImage 时生效）。
 	Src string
 	// Video 视频播放器状态（Kind == KVideo 时生效）。
-	Video   *Player
+	Video *Player
 	// WebView 内嵌浏览器状态（Kind == KWebView 时生效）。
 	WebView *WebView
 	// Chart 图表数据与缓存（Kind == KChart 时生效）。
 	Chart *Chart
+	// Spans 富文本片段（Kind == KRichText 时生效）。
+	Spans    []TextSpan
+	RichOpts RichTextOptions
+	// rich 布局阶段写入的折行/片段数据（绘制与命中共用）。
+	rich richLayoutData
+	// OnSpanClick 富文本片段点击回调（链接命中）。
+	OnSpanClick func(TextSpan)
+	// OnActivate 键盘 Enter/Space 激活回调（无则回退 OnClick）。
+	OnActivate func()
+	// A11y 无障碍元数据（角色/名称/描述），当前仅用于导出与调试。
+	A11y    A11yInfo
 	OnClick func()
 	// OnClickAt 带点击坐标（相对节点左上角）的点击回调，滑块等需要。
 	OnClickAt func(x, y float32)
 	// OnHover 悬停变化回调。
-	OnHover   func(bool)
+	OnHover func(bool)
 	// OnPress 鼠标按下即触发（在按下后的第一帧分发一次，早于 OnDrag/OnClick）。
 	// 自绘标题栏拖动、菜单按下等需要“按下就响应”的场景用它。
-	OnPress   func()
-	OnScroll  func(dy float32)
+	OnPress  func()
+	OnScroll func(dy float32)
 	// OnChar / OnKey 仅在节点获得键盘焦点时收到事件。
 	OnChar func(rune)
 	OnKey  func(uint32)
@@ -70,7 +83,7 @@ type Node struct {
 	OnDragEnd func()
 	// OnDrop 文件拖入回调：拖入落点命中本节点区域时触发，paths 为拖入的文件/文件夹路径。
 	// 与 OnClick 一样沿祖先冒泡，未设置 OnDrop 的子节点由最近的祖先接管。
-	OnDrop func(paths []string)
+	OnDrop   func(paths []string)
 	Disabled bool
 
 	// 运行时状态
@@ -80,8 +93,8 @@ type Node struct {
 	// 保证「测量行数」与「实际绘制行数」一致。
 	wrapW    float32
 	ContentH float32
-	Frame                 geom.Rect
-	Parent                *Node
+	Frame    geom.Rect
+	Parent   *Node
 
 	tag string
 }
@@ -137,6 +150,15 @@ func Text(s string) *Node {
 
 // Rich 与 Text 相同，语义别名。
 func Rich(s string) *Node { return Text(s) }
+
+// ActivateEvt 键盘激活回调（Enter / Space 落到焦点节点时触发）。
+func (n *Node) ActivateEvt(fn func()) *Node { n.OnActivate = fn; return n }
+
+// A11y 设置无障碍元数据（角色 + 名称 + 描述）。
+func (n *Node) A11yOn(role A11yRole, name, desc string) *Node {
+	n.A11y = A11yInfo{Role: role, Name: name, Desc: desc}
+	return n
+}
 
 // Image 图片节点（PNG/JPEG/GIF/BMP，尺寸默认取原图像素）。
 func Image(path string) *Node {
@@ -300,10 +322,22 @@ func (n *Node) JustifyTo(a Align) *Node { n.Justify = a; return n }
 
 func (n *Node) Horizontal() *Node { n.Dir = Horizontal; return n }
 
-func (n *Node) Tap(fn func()) *Node { n.OnClick = fn; return n }
+// Tap 点击回调。nil 安全：可选节点（如透明度为 0 时返回 nil 的 Scrim）
+// 可直接链式调用，不会因 nil 指针 panic。
+func (n *Node) Tap(fn func()) *Node {
+	if n != nil {
+		n.OnClick = fn
+	}
+	return n
+}
 
-// TapAt 带相对坐标的点击回调（滑块、进度跳转等）。
-func (n *Node) TapAt(fn func(x, y float32)) *Node { n.OnClickAt = fn; return n }
+// TapAt 带相对坐标的点击回调（滑块、进度跳转等）。nil 安全。
+func (n *Node) TapAt(fn func(x, y float32)) *Node {
+	if n != nil {
+		n.OnClickAt = fn
+	}
+	return n
+}
 
 // OnCharEvt 键盘字符输入回调（需配合 .St(St().FocusOn())）。
 // OnCharEvt 键盘字符输入回调（需配合 .St(St().FocusOn())）。

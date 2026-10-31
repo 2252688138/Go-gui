@@ -348,13 +348,19 @@ func glCopyTexSubImage2D(target uint32, level, xoff, yoff, x, y, w, h int32) {
 	glCall("copyTexSubImage2D", int(target), int(level), int(xoff), int(yoff), int(x), int(y), int(w), int(h))
 }
 
-func glViewport(x, y, w, h int32)     { glCall("viewport", int(x), int(y), int(w), int(h)) }
-func glScissor(x, y, w, h int32)      { glCall("scissor", int(x), int(y), int(w), int(h)) }
-func glClearColor(r, g, b, a float32) { glCall("clearColor", float64(r), float64(g), float64(b), float64(a)) }
-func glClear(mask uint32)             { glCall("clear", int(mask)) }
-func glEnable(cap uint32)             { glCall("enable", int(cap)) }
-func glDisable(cap uint32)            { glCall("disable", int(cap)) }
-func glBlendFunc(sf, df uint32)       { glCall("blendFunc", int(sf), int(df)) }
+func glViewport(x, y, w, h int32) { glCall("viewport", int(x), int(y), int(w), int(h)) }
+
+// glGetString 浏览器端不直接暴露 GL 字符串，返回 nil（软渲染判定不适用）。
+func glGetString(name uint32) *byte { return nil }
+
+func glScissor(x, y, w, h int32) { glCall("scissor", int(x), int(y), int(w), int(h)) }
+func glClearColor(r, g, b, a float32) {
+	glCall("clearColor", float64(r), float64(g), float64(b), float64(a))
+}
+func glClear(mask uint32)       { glCall("clear", int(mask)) }
+func glEnable(cap uint32)       { glCall("enable", int(cap)) }
+func glDisable(cap uint32)      { glCall("disable", int(cap)) }
+func glBlendFunc(sf, df uint32) { glCall("blendFunc", int(sf), int(df)) }
 
 func glDrawArrays(mode uint32, first, count int32) {
 	glCall("drawArrays", int(mode), int(first), int(count))

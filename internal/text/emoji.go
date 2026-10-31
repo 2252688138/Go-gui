@@ -24,7 +24,11 @@ type emojiBitmap struct {
 	Top  int
 }
 
-// gdiFont 用 GDI 把 Emoji 渲染到 32bpp DIB（Windows 会输出彩色字形）。
+// gdiFont 彩色 Emoji 光栅器。
+//
+// 主路径是纯 Go 的 COLR/CPAL 分层合成（emojicolor.go），GDI 只是兜底：
+// GDI 的 DrawText 不支持 COLR 彩色字形（Windows 10/11 上只会画出黑白轮廓），
+// 所以彩色 Emoji 不能依赖它。
 type gdiFont struct {
 	mu    sync.Mutex
 	name  string
@@ -93,6 +97,16 @@ func (g *gdiFont) ensureFont(px int32) {
 
 // render 渲染一个字符，返回裁剪后的 RGBA 位图、前进宽度与是否成功。
 func (g *gdiFont) render(s string, px int32) (*emojiBitmap, int, bool) {
+	// 首选 COLR/CPAL 分层渲染：GDI 不支持 COLR 彩色字形（只出黑白轮廓），
+	// 彩色 Emoji 必须按调色板逐层合成（见 emojicolor.go）。
+	if rs := []rune(s); len(rs) == 1 {
+		if cf := colorEmoji(); cf != nil {
+			if bmp, adv, ok := cf.render(rs[0], px); ok && bmp != nil {
+				return bmp, adv, true
+			}
+		}
+	}
+
 	g.ensureFont(px)
 	g.mu.Lock()
 	defer g.mu.Unlock()

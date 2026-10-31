@@ -237,13 +237,13 @@ func (a *App) paintChartGrid(c *Chart, lg chartLayout) {
 			a.r.Rect(gpu.Shape{Rect: geom.Rect{X: lg.plot.X, Y: y, W: lg.plot.W, H: 1}, Fill: line})
 		}
 		// 竖向网格：跟随 x 组中心
-	cn := c.points()
-	if c.Type != ChartRadar && cn > 1 && cn <= 24 {
-		for i := 0; i < cn; i++ {
-			x := float32(math.Round(float64(lg.xAt(i, cn))))
-			a.r.Rect(gpu.Shape{Rect: geom.Rect{X: x, Y: lg.plot.Y, W: 1, H: lg.plot.H}, Fill: line})
+		cn := c.points()
+		if c.Type != ChartRadar && cn > 1 && cn <= 24 {
+			for i := 0; i < cn; i++ {
+				x := float32(math.Round(float64(lg.xAt(i, cn))))
+				a.r.Rect(gpu.Shape{Rect: geom.Rect{X: x, Y: lg.plot.Y, W: 1, H: lg.plot.H}, Fill: line})
+			}
 		}
-	}
 	}
 	if c.ShowAxis {
 		axis := C(ColStroke)

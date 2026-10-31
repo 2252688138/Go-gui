@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>GoGUI · Web</title>
+<!--
+  GoGUI 浏览器版宿主页（与 cmd/gallery/main.go 同一份界面代码配套）：
+    - canvas#screen   渲染目标（WebGL 2；后端发现缺省会自动创建，这里显式提供）
+    - #err            错误浮层（ui 包的 showPageError 写这里）
+    - font.ttf        必需字体（与 index.html 同目录；可选 font-bold.ttf）
+    - __goguiStage / __goguiFrames  由 Go 侧写入，用于冒烟测试与加载完成判定
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0f19; overflow: hidden; }
+  canvas#screen { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
+  #boot {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    gap: 10px; background: #0b0f19; color: #8b94ad; font-size: 14px;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    transition: opacity .25s ease;
+  }
+  #boot.hide { opacity: 0; pointer-events: none; }
+  #spinner {
+    width: 14px; height: 14px; border: 2px solid #2a3350; border-top-color: #4f7cff;
+    border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #err {
+    position: fixed; left: 16px; right: 16px; bottom: 16px; display: none; z-index: 9;
+    white-space: pre-wrap; color: #ff9a9a; font: 12px/1.55 ui-monospace, Consolas, monospace;
+    background: #1a1020dd; border: 1px solid #4a2030; border-radius: 10px; padding: 12px 14px;
+    max-height: 45vh; overflow: auto;
+  }
+</style>
+</head>
+<body>
+<canvas id="screen" tabindex="0"></canvas>
+<div id="boot"><div id="spinner"></div><span id="bootText">正在加载 WebAssembly…</span></div>
+<div id="err"></div>
+
+<script src="hls.min.js"></script>
+<script src="wasm_exec.js"></script>
+<script>
+(async () => {
+  const boot = document.getElementById('boot');
+  const bootText = document.getElementById('bootText');
+  const errBox = document.getElementById('err');
+  const showErr = (msg) => {
+    errBox.style.display = 'block';
+    errBox.textContent = String(msg && msg.stack ? msg.stack : msg);
+    boot.classList.add('hide');
+  };
+  window.addEventListener('error', (e) => showErr(e.message || e.error));
+  window.addEventListener('unhandledrejection', (e) => showErr(e.reason));
+
+  try {
+    if (typeof Go === 'undefined') {
+      throw new Error('wasm_exec.js 未加载：请确认它和 index.html 在同一目录');
+    }
+    const go = new Go();
+    let result;
+    if (WebAssembly.instantiateStreaming) {
+      // 服务器必须给 .wasm 正确的 Content-Type: application/wasm
+      result = await WebAssembly.instantiateStreaming(fetch('main.wasm'), go.importObject)
+        .catch(async () => WebAssembly.instantiate(await (await fetch('main.wasm')).arrayBuffer(), go.importObject));
+    } else {
+      result = await WebAssembly.instantiate(await (await fetch('main.wasm')).arrayBuffer(), go.importObject);
+    }
+
+    bootText.textContent = '正在启动界面…';
+    const running = go.run(result.instance);
+    // 首帧画出来后淡出加载层
+    const timer = setInterval(() => {
+      if (window.__goguiFrames > 0) {
+        clearInterval(timer);
+        boot.classList.add('hide');
+      }
+    }, 50);
+    running.catch(showErr);
+  } catch (e) {
+    showErr(e);
+  }
+})();
+</script>
+</body>
+</html>

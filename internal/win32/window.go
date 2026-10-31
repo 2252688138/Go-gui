@@ -92,16 +92,16 @@ type Window struct {
 	HDC   uintptr
 	HGLRC uintptr
 
-	cfg     Config
-	w       int32
-	h       int32
-	scale   float32
-	dpi     uint32
+	cfg   Config
+	w     int32
+	h     int32
+	scale float32
+	dpi   uint32
 	// borderQuiet 边框策略首次应用后置位（窗口激活时会反复应用，只首次打日志）
 	borderQuiet bool
 	onEvent     func(Event)
-	running bool
-	id      int
+	running     bool
+	id          int
 
 	// IME 组合状态
 	compText  string

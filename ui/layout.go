@@ -6,6 +6,10 @@
 package ui
 
 import (
+	"math"
+	"os"
+	"strconv"
+
 	"gogui/internal/geom"
 	"gogui/internal/text"
 )
@@ -87,6 +91,10 @@ func (lc *layoutCtx) measure(n *Node, maxW float32) (float32, float32) {
 func Layout(root *Node, w, h float32, fonts *fontCache) {
 	viewportW, viewportH = w, h
 	lc := &layoutCtx{fonts: fonts, viewportH: h}
+	if fonts != nil {
+		// 帧号用于“本帧用到的字体不淘汰”（见 fontCache.evictOldest）
+		fonts.frame++
+	}
 	root.Frame = geom.Rect{X: 0, Y: 0, W: w, H: h}
 	measureNode(lc, root, Constraints{0, w, 0, h}, nil)
 	root.Frame.W, root.Frame.H = w, h
@@ -170,6 +178,12 @@ func measureNode(lc *layoutCtx, n *Node, c Constraints, parent *Node) {
 				}
 			}
 			contentH = lines * st.LineHeight
+		}
+
+	case KRichText:
+		contentW, contentH = lc.layoutRich(n, innerMaxW)
+		if st.Width > 0 || st.WidthPct > 0 {
+			contentW = innerMaxW
 		}
 
 	case KImage:
@@ -922,12 +936,15 @@ func placeChildren(lc *layoutCtx, n *Node, innerW, innerH float32) {
 }
 
 // clampChildren 把子项裁剪到父框内（配合 Clipped）。
+// 文本节点不参与：文本按完整 Frame 宽度排版（居中/右对齐都以此为准），
+// 越界部分交给绘制期的裁剪区截断即可。若在这里改成窄 Frame，居中文本会被
+// 重新居中——评分组件「左半星」就整体偏移成了半截错位的星。
 func clampChildren(n *Node) {
 	if !n.Style.Clip || n.Kind == KScroll {
 		return
 	}
 	for _, c := range n.Children {
-		if c == nil {
+		if c == nil || c.Kind == KText {
 			continue
 		}
 		c.Frame = clampRect(c.Frame, n.Frame)
@@ -1024,16 +1041,67 @@ type fontCache struct {
 	fonts map[fontKey]*text.Font
 	// age 最近使用序号（LRU 回收用）
 	age   map[fontKey]uint64
+	used  map[fontKey]uint64
 	tick  uint64
+	frame uint64
 	face  string
 	scale float32
 	// onEvict 字体被回收时通知上层释放对应图集纹理
 	onEvict func(*text.Font)
 }
 
-// maxFonts 字体实例缓存上限。每个字体自带 4MB 字形图集 + opentype face，
-// 不限制数量时「字号×字重×家族」组合会让内存无界增长（旧版 16MB/字体）。
-const maxFonts = 24
+// 字体实例缓存上限。每个字体自带字形图集，不限制数量时「字号×字重×家族」组合
+// 会让内存无界增长；但上限太小会适得其反：像「组件套件」这类一屏内用了 40+ 种
+// 字号/字重的页面，旧上限 24 会导致每帧都在淘汰+重建字体、重新栅格化全部字形
+// （实测占满 36% 的 GDI 调用与 33% 的字形栅格化），表现为整页 12fps、CPU 吃满。
+// 现改为「帧感知 LRU」：本帧用到的字体一律不淘汰，软上限 96、硬上限 160。
+const (
+	// maxFonts 软上限：考虑到「字幕×字重」组合（字号已量化到 0.5px，
+	// 套件页约 20+ 种）。上限太低会每帧淘汰重建字体（字形重栅格化，CPU 吃满）。
+	maxFonts     = 32
+	maxFontsHard = 64
+	// 每个字体自带字形图集（RGBA，懒分配），所以不能只限数量：
+	// 再加一条「图集总字节预算」，超了先淘汰本帧没用到的旧字体。
+	fontAtlasBudget = 24 << 20
+	// idleKeepFonts 深度空闲（最小化 / 长期不在前台）时保留的字体数。
+	idleKeepFonts = 10
+)
+
+// maxFontsLimit 字体缓存软上限（默认 maxFonts）。
+// 内存吃紧的机器可以用环境变量调小（代价是字号多的大页面会重新栅格化）：
+//
+//	GOGUI_FONT_MAX=16
+var maxFontsLimit = func() int {
+	if v := os.Getenv("GOGUI_FONT_MAX"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 8 {
+			return n
+		}
+	}
+	return maxFonts
+}()
+
+// atlasTotal 当前图集总字节（O(n)，仅新建字体时调用）。
+func (fc *fontCache) atlasTotal() int {
+	n := 0
+	for _, f := range fc.fonts {
+		n += f.AtlasBytes()
+	}
+	return n
+}
+
+// trimTo 只保留最近使用的 keep 个字体（空闲降内存用）。
+func (fc *fontCache) trimTo(keep int) {
+	if keep < 1 {
+		keep = 1
+	}
+	for len(fc.fonts) > keep {
+		before := len(fc.fonts)
+		fc.evictOldest()
+		if len(fc.fonts) == before {
+			return // 无可淘汰（本帧全在用 / 已达硬上限）
+		}
+	}
+}
 
 type fontKey struct {
 	family string
@@ -1042,7 +1110,13 @@ type fontKey struct {
 }
 
 func newFontCache(face string, scale float32) *fontCache {
-	return &fontCache{fonts: make(map[fontKey]*text.Font), age: make(map[fontKey]uint64), face: face, scale: scale}
+	return &fontCache{
+		fonts: make(map[fontKey]*text.Font),
+		age:   make(map[fontKey]uint64),
+		used:  make(map[fontKey]uint64),
+		face:  face,
+		scale: scale,
+	}
 }
 
 func (fc *fontCache) get(size float32, weight int32) *text.Font {
@@ -1061,29 +1135,49 @@ func (fc *fontCache) getFamily(size float32, weight int32, family string) *text.
 	if face == "" {
 		face = fc.face
 	}
-	key := fontKey{face, int16(size * 4), weight}
+	// 字号量化到 0.5px：11.5/12 这类视觉无差别的近邻字号共用同一字体，
+	// 能显著减少「字号×字重」组合数（套件页从 40+ 降到干 20+）。
+	key := fontKey{face, int16(math.Round(float64(size)*2)), weight}
 	fc.tick++
 	if f, ok := fc.fonts[key]; ok {
 		fc.age[key] = fc.tick
+		fc.used[key] = fc.frame
 		return f
 	}
-	if len(fc.fonts) >= maxFonts {
+	if len(fc.fonts) >= maxFontsLimit || fc.atlasTotal() >= fontAtlasBudget {
 		fc.evictOldest()
 	}
 	f := text.NewFont(face, size, weight, fc.scale)
 	fc.fonts[key] = f
 	fc.age[key] = fc.tick
+	fc.used[key] = fc.frame
 	return f
 }
 
 // evictOldest 回收最久未使用的字体（同时释放其图集纹理）。
+// 本帧正在使用的字体（used == frame）一律跳过：否则一屏用 40+ 种字号时，
+// 每次取值都会把刚用过的字体踢掉，下一帧再重建，落入“淘汰-重建”死循环。
 func (fc *fontCache) evictOldest() {
 	var oldKey fontKey
 	var oldest uint64
 	found := false
 	for k, t := range fc.age {
+		if fc.used[k] >= fc.frame {
+			continue
+		}
 		if !found || t < oldest {
 			oldKey, oldest, found = k, t, true
+		}
+	}
+	if !found {
+		// 本帧全部在用：软上限之内允许临时超限，超过硬上限再按 age 强淘汰
+		if len(fc.fonts) < maxFontsHard {
+			return
+		}
+		for k, t := range fc.age {
+			if !found || t < oldest {
+				oldKey, oldest, found = k, t, true
+			}
 		}
 	}
 	if !found {
@@ -1097,6 +1191,7 @@ func (fc *fontCache) evictOldest() {
 		delete(fc.fonts, oldKey)
 	}
 	delete(fc.age, oldKey)
+	delete(fc.used, oldKey)
 	// 折行缓存以 *Font 为键，字体已关闭必须整体失效，否则缓存会拖住字体与图集
 	clearWrapMemo()
 }

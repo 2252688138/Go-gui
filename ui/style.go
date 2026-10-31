@@ -51,8 +51,12 @@ type Style struct {
 	ColW float32
 
 	Bg      gpu.Paint
-	BgTo    gpu.Paint // 有 alpha > 0 时启用线性渐变
+	BgTo    gpu.Paint // BgToSet 为 true 时启用线性渐变
 	BgAngle float32
+	// BgSet / BgToSet 记录 Bg / BgTo 是否被显式设置过。
+	// 渐变端点经常是全透明（rgba(...,0)，alpha=0），零值 Paint 与「未设置」无法区分，
+	// merge 只按 alpha>0 判断会把透明端丢成纯黑透明，渐变就画错了。
+	BgSet, BgToSet bool
 
 	Radius      [4]float32
 	Border      float32
@@ -87,6 +91,9 @@ type Style struct {
 	// Focusable 可获取键盘焦点（输入框等）；Animated 每帧重绘（加载动画/骨架屏）
 	Focusable bool
 	Animated  bool
+	// AnimSlow 低帧率动画（光标闪烁 / 骨架屏流光等周期型动画）：
+	// 仍然持续重绘，但按 ~30Hz 而不是 120Hz，避免装饰动画把 CPU 拉满。
+	AnimSlow bool
 
 	// BackdropBlur > 0 时对该节点区域应用毛玻璃背景模糊（离屏 FBO + Kawase）
 	BackdropBlur float32
@@ -95,6 +102,11 @@ type Style struct {
 
 	// Scrollbar 滚动条可见（默认可见）
 	Scrollbar bool
+
+	// NoRing 关闭统一焦点环（默认开启，键盘聚焦时绘制）。
+	NoRing bool
+	// DrawX / DrawY 绘制期位移（FLIP 布局动画、抖动等，不影响布局与命中基准）。
+	DrawX, DrawY float32
 }
 
 // St 新建样式。
@@ -127,12 +139,12 @@ func (s *Style) ColsN(n int) *Style { s.Cols = n; return s }
 // ColWidth 设置固定列宽（>0 且未指定列数时按可用宽度自动算列数）。
 func (s *Style) ColWidth(v float32) *Style { s.ColW = v; return s }
 
-
-func (s *Style) BgC(v any) *Style { s.Bg = C(v); return s }
+func (s *Style) BgC(v any) *Style { s.Bg = C(v); s.BgSet = true; return s }
 func (s *Style) BgGrad(from, to any, angle float32) *Style {
 	s.Bg = C(from)
 	s.BgTo = C(to)
 	s.BgAngle = angle
+	s.BgSet, s.BgToSet = true, true
 	return s
 }
 
@@ -158,7 +170,7 @@ func (s *Style) Text(size float32, weight int32, c any) *Style {
 	s.FontSize, s.FontWeight, s.Color = size, weight, C(c)
 	return s
 }
-func (s *Style) Lh(v float32) *Style   { s.LineHeight = v; return s }
+func (s *Style) Lh(v float32) *Style { s.LineHeight = v; return s }
 
 // Font 指定字体家族（需要在系统字体目录可解析）。
 func (s *Style) Font(family string) *Style { s.FontFamily = family; return s }
@@ -241,6 +253,16 @@ func (s *Style) FocusOn() *Style { s.Focusable = true; return s }
 // AnimOn 标记为需要逐帧重绘。
 func (s *Style) AnimOn() *Style { s.Animated = true; return s }
 
+// AnimSlowOn 标记为「低帧率持续重绘」（光标闪烁 / 骨架屏流光）。
+// 交互与 Tween 动画仍走高帧率；只有纯装饰动画降频。
+func (s *Style) AnimSlowOn() *Style { s.Animated, s.AnimSlow = true, true; return s }
+
+// NoFocusRing 关闭统一焦点环（自绘焦点样式的控件用）。
+func (s *Style) NoFocusRing() *Style { s.NoRing = true; return s }
+
+// Translate 绘制期位移（不参与布局，FLIP / 拖拽跟手用）。
+func (s *Style) Translate(x, y float32) *Style { s.DrawX, s.DrawY = x, y; return s }
+
 // merge 覆盖默认样式（零值字段不覆盖）。
 func (s Style) merge(o Style) Style {
 	if o.Width != 0 {
@@ -288,10 +310,14 @@ func (s Style) merge(o Style) Style {
 	if o.ColW != 0 {
 		s.ColW = o.ColW
 	}
-	if o.Bg.A > 0 {
+	if o.BgSet {
+		s.Bg, s.BgSet = o.Bg, true
+	} else if o.Bg.A > 0 {
 		s.Bg = o.Bg
 	}
-	if o.BgTo.A > 0 {
+	if o.BgToSet {
+		s.BgTo, s.BgAngle, s.BgToSet = o.BgTo, o.BgAngle, true
+	} else if o.BgTo.A > 0 {
 		s.BgTo = o.BgTo
 		s.BgAngle = o.BgAngle
 	}
@@ -376,6 +402,18 @@ func (s Style) merge(o Style) Style {
 	}
 	if o.Animated {
 		s.Animated = true
+		if o.AnimSlow {
+			s.AnimSlow = true
+		}
+	}
+	if o.NoRing {
+		s.NoRing = true
+	}
+	if o.DrawX != 0 {
+		s.DrawX = o.DrawX
+	}
+	if o.DrawY != 0 {
+		s.DrawY = o.DrawY
 	}
 	return s
 }

@@ -15,8 +15,8 @@ import (
 type Ease func(t float32) float32
 
 var (
-	EaseLinear Ease = func(t float32) float32 { return t }
-	EaseInQuad Ease = func(t float32) float32 { return t * t }
+	EaseLinear  Ease = func(t float32) float32 { return t }
+	EaseInQuad  Ease = func(t float32) float32 { return t * t }
 	EaseOutQuad Ease = func(t float32) float32 {
 		return 1 - (1-t)*(1-t)
 	}
@@ -245,6 +245,34 @@ func Keyframes(key string, keys []Key, dur float32, loop bool) float32 {
 		prev = k
 	}
 	return prev.Value
+}
+
+// activeTweenKeys 当前仍在跑（未收敛）的补间/弹簧/关键帧 key，调试用。
+func activeTweenKeys() []string {
+	animMu.Lock()
+	defer animMu.Unlock()
+	now := AnimTime()
+	out := make([]string, 0, len(tweenStates)+len(springStates)+len(timelineStates))
+	for k, st := range tweenStates {
+		if st == nil || st.dur <= 0 {
+			continue
+		}
+		if p := (now - st.start) / st.dur; p < 1 {
+			out = append(out, "tw:"+k)
+		}
+	}
+	for k, st := range springStates {
+		if st == nil {
+			continue
+		}
+		if math.Abs(float64(st.target-st.x)) >= 0.01 || math.Abs(float64(st.v)) >= 0.01 {
+			out = append(out, "sp:"+k)
+		}
+	}
+	for k := range timelineStates {
+		out = append(out, "kf:"+k)
+	}
+	return out
 }
 
 // ResetAnim 重置指定 key 的动画（重建入场动画时用）。

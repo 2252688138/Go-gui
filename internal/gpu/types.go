@@ -34,7 +34,7 @@ func (p Paint) MulAlpha(a float32) Paint { p.A *= a; return p }
 // Gradient 线性渐变（两色）。
 type Gradient struct {
 	On       bool
-	Angle    float32 // 角度（度），0 = 从左到右，90 = 从上到下
+	Angle    float32 // CSS 角度：0 = 向上，90 = 向右，180 = 向下，270 = 向左（From 在起始侧）
 	From, To Paint
 }
 

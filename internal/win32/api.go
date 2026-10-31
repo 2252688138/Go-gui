@@ -161,6 +161,9 @@ var (
 var (
 	GetModuleHandleW func(name *uint16) uintptr
 	GetLastError     func() uint32
+	// GetCurrentProcess / SetProcessWorkingSetSize：空闲回收物理页用（见 TrimWorkingSet）
+	GetCurrentProcess        func() uintptr
+	SetProcessWorkingSetSize func(h uintptr, min, max uintptr) int32
 )
 
 var (
@@ -313,6 +316,8 @@ func init() {
 
 	bind(libKernel32, &GetModuleHandleW, "GetModuleHandleW")
 	bind(libKernel32, &GetLastError, "GetLastError")
+	bind(libKernel32, &GetCurrentProcess, "GetCurrentProcess")
+	bind(libKernel32, &SetProcessWorkingSetSize, "SetProcessWorkingSetSize")
 	// 剪贴板（clipboard.go）
 	bind(libUser32, &OpenClipboard, "OpenClipboard")
 	bind(libUser32, &CloseClipboard, "CloseClipboard")

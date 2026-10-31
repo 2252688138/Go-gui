@@ -1,12 +1,12 @@
-﻿# GoGUI
+# GoGUI
 
-纯 Go、零 cgo 的跨平台自绘 GUI 框架。界面主体全部由 OpenGL 自绘（不依赖 WebView），另带可选的内嵌浏览器组件（系统 WebView2）；风格对齐现代 Web UI（深色、圆角、渐变、投影、flex 布局），样式可完全自定义。
+纯 Go、零 cgo 的跨平台自绘 GUI 框架。**一套 UI 代码**编译到 Windows / Linux / macOS / Web（Android / iOS 骨架已就位）；界面主体全部由 OpenGL 自绘（不依赖 WebView），另带可选的内嵌浏览器组件（系统 WebView2）；风格对齐现代 Web UI（深色、圆角、渐变、投影、flex 布局），样式可完全自定义。
 
 简体中文 ｜ [English](README.en.md)
 
 ```
 ┌──────────────────────────────────────────────┐
-│  cmd/demo           示例应用                  │
+│  cmd/gallery            示例应用（跨平台）    │
 ├──────────────────────────────────────────────┤
 │  ui                 声明式组件树 / 样式 / 布局 │
 │                     事件路由 / 绘制 / 主题     │
@@ -14,7 +14,9 @@
 │  internal/gpu       OpenGL 3.3 批处理渲染器   │
 │  internal/text     opentype 矢量光栅化        │
 │  internal/geom      几何基础类型              │
+│  internal/display   原生窗口契约 + 各端适配   │
 │  internal/win32     Win32/WGL 绑定（purego）  │
+│  internal/x11       X11/EGL 绑定（purego）    │
 └──────────────────────────────────────────────┘
 ```
 
@@ -48,6 +50,22 @@
     <td width="50%" valign="top"><i>以上界面全部由 OpenGL 自绘：无 HTML、无 CSS、无 WebView 参与主体渲染。<br>运行 <code>go run ./cmd/gallery</code> 可逐页查看。</i></td>
   </tr>
 </table>
+
+## 最近更新
+
+本轮集中补齐「列表 / 内容型页面」组件与一批交互细节：
+
+| 方向 | 新增 / 修复 |
+|---|---|
+| 列表组件 | `FileTree` 文件树（缩进层级 / 展开折叠 / 选中高亮，展开态按 Key 记忆、折叠子树不建节点）、`MediaCard` 图文卡片（封面 / 角标 / 评分 / 标题 / 标签 / 操作按钮）、`ListRows` 列表行（图标 / 标题 / 副标题 / 右侧标签，支持多选与分隔线）、`PostCard` 社区帖子、`Pager` 数字分页（省略号折叠 + 上锁页禁用） |
+| 示例页 | 「列表与表格」页改为**页内下划线页签**：列表（文件树 / 图文卡片 / 列表 / 社区帖子 / 分页）、表格（数据表格 / 聊天 / 虚拟列表 / 拖拽重排 / 三态），切换时滚动位置互不干扰 |
+| 开关 | 新增 `SwitchEx` + 样式预设（默认 / 星光 / 带字 / 渐变 / 大中小 / 禁用），可用 `WithIcon` / `WithIconNode` / `WithLabels` / `WithLabelStyle` / `WithLabelWidth` 自定义图标与文案 |
+| 取色器 | 色相条改为 12 段顺排 + 指示线，HEX 输入框宽度修正，SV 面板恢复白/黑渐变；吸管改为屏幕坐标拾色模式 |
+| 渐变 | `BgAngle` 按 CSS 角度把四角颜色烘焙进顶点色，任意角度渐变不再退化成实色 |
+| 拖拽 | `ReorderList` 补上 `OnDrag`：App 只在 `OnDrag != nil` 时建立 dragKey，只注册 `OnDragEnd` 的节点永远收不到松手事件 |
+| 滚动 | 滚轮首次滚动即建立偏移条目，修掉「有滚动条但滚轮不滚、拖一下才恢复」 |
+| 布局 | 百分比尺寸只在父级对应轴确定时有效；需要撑满一律用 `Grow(1)`，`Hp(100)` 在主轴无上限时会解析成 0（WebView2 白屏的根因） |
+| 窗口 | gallery 改为**多开**：每次启动都是独立窗口与独立页面状态（组件库里的 `SingleInstance` 仍保留，需要时自行启用） |
 
 ## 为什么不用 WebView 也能做到 Web 观感
 
@@ -108,9 +126,9 @@ func view() *ui.Node {
 ```
 
 ```bash
-go run ./cmd/demo
+go run ./cmd/gallery
 # 无控制台窗口的发布构建：
-go build -ldflags "-H=windowsgui" -o app.exe ./cmd/demo
+go build -ldflags "-H=windowsgui" -o app.exe ./cmd/gallery
 ```
 
 ## 构建与体积优化
@@ -119,7 +137,7 @@ go build -ldflags "-H=windowsgui" -o app.exe ./cmd/demo
 
 ```powershell
 ./build.ps1                 # gallery -> dist\gallery.exe
-./build.ps1 -Target all     # gallery + demo + tools
+./build.ps1 -Target all     # gallery + tools
 ./build.ps1 -Upx            # 再叠加 UPX -9（体积最小）
 ./build.ps1 -Dev            # 开发构建：保留符号 + 控制台日志
 ./build.ps1 -Installer          # 构建 + 打 NSIS 安装器 -> dist\GoGUI-<版本>-setup.exe
@@ -266,7 +284,9 @@ ui.Button("组件库", func() {
 | 表单 | `Input` `PasswordInput` `Checkbox` `Radio` `Switch` `Slider` `Progress` `Ring` |
 | 展示 | `Card` `Title` `Divider` `Tag` `Dot` `Avatar` `Badge` `KeyValue` `Empty` `Skeleton` `Spinner` |
 | 导航 | `Tabs` `TabsBar` `Breadcrumb` `Accordion` |
-| 数据 | `Table`（固定/弹性列宽、斑马纹、整行点击）`ListItem` |
+| 数据 | `Table`（固定/弹性列宽、斑马纹、整行点击）`TableV`（虚拟滚动/分组/合计/列宽拖拽）`VList` `ReorderList` `ListItem` |
+| 列表与内容 | `FileTree` 文件树 / `MediaCard` 图文卡片 / `ListRows` 列表行 / `PostCard` 社区帖子 / `Pager` 分页器 |
+| 开关 | `Switch` 基础版；`SwitchEx` + `SwitchDefault` / `SwitchSparkle` / `SwitchLabeled` / `SwitchGradient` / `SwitchSized` / `SwitchDisabled` 预设与自定义构建器 |
 | 媒体 | `Video`（画面节点）`VideoPlayer`（播放器）`Player` `VideoClip` `MediaSource`（ffmpeg 解码） |
 | 浏览器 | `WebView`（系统 WebView2 内嵌真实网页）+ `WebViewNode` / `WebViewBar` / `WebViewStatus` |
 | 浮层 | `Modal` `ModalEx` `MenuPanel` `TooltipOf` + `TooltipLayer` `Toast` `Banner` |
@@ -286,17 +306,18 @@ ui.Button("组件库", func() {
 
 ## 界面案例
 
-`cmd/gallery` 提供 8 个可直接复用的界面骨架与布局实验页，左侧列表切换，点击与输入均可交互：
+`cmd/gallery` 提供 8 个按组件类型聚合的页面，左侧列表切换；其中「列表与表格」「媒体播放」「系统操作」还带**页内页签**，点击与输入均可交互：
 
 | 案例 | 内容 | 关键能力 |
 |---|---|---|
-| 登录页 | 品牌头 / 账号密码 / 记住我 / 校验提示 | `Input` `Checkbox` 焦点输入 |
-| 仪表盘 | 4 个 KPI 卡 / 进度条 / 活动列表 | `Card` `Progress` `ListItem` `Grow` 分栏 |
-| 设置页 | 开关 / 单选 / 滑块 / 折叠 / 输入 | `Switch` `Radio` `Slider` `Accordion` |
-| 聊天 | 左右气泡 / 会话头 / 发送输入 | `Scroll` + `Spacer` 对齐气泡 |
-| 数据表格 | 表头 / 斑马纹 / 状态标签 / 行内进度 | `Row` 定宽列 + `Clipped` 圆角表格 |
-| 布局方式 | 8 种布局能力逐项演示，可拖动窗口看响应式 | `Grid` `Wrap` `Masonry` `Stack` `EqualRow` `JustifyTo` `Pick` |
-| 视频播放器 | 内置合成片段 + 打开 GIF / 本地视频（mp4/mkv/mov/avi/webm/flv/ts/m3u8）+ 直链 | `VideoPlayer` `MediaSource` 逐帧纹理 |
+| 基础组件 | 按钮变体 / 输入框 / 下拉框 / 多行输入 / 数字 / 日期 / 搜索 / 滑块 / 开关族 / 导航 / 提示 | `Btn` `Input` `Select` `Textarea` `SwitchEx` `Tabs` `Toast` |
+| 表单与弹窗 | 表单校验 / 高级输入（自动完成 / 标签 / 评分 / 区间 / 级联 / 取色 / 上传）/ 四类弹窗 / 抽屉 | `FormItem` `Upload` `ColorPicker` `Modal*` `Drawer` |
+| 列表与表格 | 页签：**列表**（文件树 / 图文卡片 / 列表 / 社区帖子 / 分页）、**表格**（数据表格 / 聊天 / 虚拟列表 / 拖拽重排 / 三态） | `FileTree` `MediaCard` `ListRows` `PostCard` `Pager` `TableV` `VList` |
+| 媒体播放 | 页签：视频播放（本地 / 直链 / 全屏）、音频播放（频谱 / 播放列表） | `VideoPlayer` `MusicPlayer` `MediaSource` |
+| 布局与仪表盘 | 8 种布局能力逐项演示（可拖动窗口看响应式）+ 统计卡 / 活动列表 | `Grid` `Wrap` `Masonry` `Stack` `EqualRow` `JustifyTo` `Pick` `Statistic` |
+| 图表 | 折线 / 面积 / 柱状 / 饼 / 环形 / 雷达 / 散点（数据不变时 1 个 draw call） | `Chart` `ChartView` 命中与悬浮高亮 |
+| 文本与富文本 | Markdown 渲染（代码高亮 / 表格 / 公式 / Mermaid）+ 富文本显示与编辑器 | `Markdown` `RichText` `RichEditor` |
+| 系统操作 | 页签：系统能力（图片 / 拖入 / 毛玻璃 / IME / 动画）、WebView 浏览器 | `FileRow` `DropZone` `WebView` `Print` |
 
 ```bash
 go run ./cmd/gallery                       # 打开案例程序
@@ -380,7 +401,7 @@ gogui/
 │   ├── text/      opentype 字形光栅化、图集、度量
 │   ├── win32/     Win32 + WGL 绑定（purego 动态加载）
 │   └── geom/      几何类型
-├── cmd/demo/      示例
+├── cmd/gallery/   示例应用（8 个分类页 + 页内页签）
 └── tools/         fonttest / atlasdump / layouttest 调试工具
 ```
 
@@ -394,19 +415,48 @@ go run ./tools/atlasdump       # ASCII 打印字形图集
 
 运行时可设置 `ui.Options.DumpLayout = "layout.txt"`，首帧后导出布局树并退出。
 
-## 跨平台路线
+## 多端渲染（一套 UI 代码）
 
-当前实现为 Windows（Win32 + WGL）。`internal/gpu.Backend` 接口已抽象，新增平台只需实现：
+平台差异只存在于**窗口后端 / GL 端口 / 字体来源**三处，`ui/app.go`（1700+ 行布局、绘制、命中、滚动、动画、事件分发）**没有任何平台条件编译**。分层与 [gio](https://gioui.org) 同构：
 
-| 平台 | 窗口层 | 渲染层 |
+```
+ui/app.go            布局 / 绘制 / 命中 / 滚动 / 动画（唯一一份）
+ui/backend.go        Backend 接口：平台无关契约
+ui/backend_*.go      各端实现（windows / x11 / wasm / null）
+internal/display     原生窗口契约 + 各端适配
+internal/gpu         glport_{win32,unix,wasm}.go —— 同一组 GL 调用，三套后端
+internal/text        fontplat_{windows,linux,darwin,android,ios}.go
+```
+
+| 平台 | 窗口 / 上下文 | 状态 |
 |---|---|---|
-| Windows | Win32（已完成） | OpenGL 3.3（已完成） |
-| macOS | Cocoa `NSWindow` + `CAMetalLayer` | Metal 或 OpenGL 4.1 |
-| Linux | X11 / Wayland | OpenGL / Vulkan |
-| Android | `ANativeWindow` + EGL | GLES 3 |
-| Web | `canvas`（鼠标 / 键盘 / 滚轮事件） | WebGL 2 + WebAssembly（已完成） |
+| Windows | Win32 + WGL（purego） | ✅ 完整（含 DirectComposition、WebView2、MF 解码） |
+| Linux | X11（purego `libX11`）+ EGL + OpenGL 3.3 | ✅ 可运行（中文需 XIM，见下） |
+| macOS | Cocoa `NSWindow` + NSOpenGL 3.2 Core（purego objc_msgSend） | ✅ 已实现（交叉编译验证，实机待测） |
+| Web | canvas + WebGL 2 + WASM | ✅ 完整 |
+| Android | NativeActivity + EGL/GLES3 + AInputQueue（cgo） | ✅ 已实现（NDK 实测构建） |
+| iOS | UIKit + EAGL/GLES3（cgo） | ⚠️ 已实现、待 Xcode 验证 |
 
-上层 `ui` 包与平台无关，换后端不需要改动业务代码。
+```powershell
+./build-multi.ps1            # 一次产出 windows / linux(amd64,arm64) / darwin(amd64,arm64) / wasm
+./build-android.ps1          # Android：dist/android/<abi>/libgogui.so（自动探测 NDK）
+```
+
+能力差异用 `ui.HasCap` 查询后优雅降级（符号在所有平台都存在，缺失能力一律空操作，绝不 panic）：
+
+```go
+if ui.HasCap(ui.CapVideo) {
+    p, _ := ui.NewMediaPlayer("movie.mp4")
+    return ui.VideoPlayer("v", p)
+}
+return ui.Card(ui.Empty("当前平台不支持视频", "可用 HasCap(CapVideo) 判断"))
+```
+
+完整矩阵、环境依赖、Linux 实现要点、新增一端的六个文件与新平台自测清单见 [`docs/multiplatform.md`](docs/multiplatform.md)。
+
+### 零 cgo 的边界
+
+桌面端（Windows / Linux / macOS）与 Web 端保持 **CGO_ENABLED=0**：系统库全部用 `purego` 在运行时动态加载（`libX11` / `libEGL` / `libGL` / `opengl32`）。移动端（Android / iOS）走 gomobile/cgo，这是业界唯一可行路径。
 
 ### 浏览器端（web/）
 
@@ -489,7 +539,7 @@ ui.SaveFileDialog("保存", "文本|*.txt", "txt")
 ## 已知限制
 
 - 富文本（行内混排 / 图文环绕）与竖排未实现
-- 虚拟列表尚未内置（可用分页手动实现）
+- 图片节点按目标框拉伸绘制（无 cover 裁切），封面类场景建议用同比例图或渐变占位
 - 视频解码依赖外部 ffmpeg / ffprobe（子进程，大分辨率软解 CPU 占用较高）
 
 ## 视频播放器

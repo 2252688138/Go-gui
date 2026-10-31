@@ -38,10 +38,10 @@ func glBufferSubData(target uint32, offset int, data []float32) {
 }
 func glDeleteBuffers(n int32, ids *uint32) { win32.GlDeleteBuffers(n, ids) }
 
-func glGenVertexArrays(n int32, ids *uint32)   { win32.GlGenVertexArrays(n, ids) }
-func glBindVertexArray(id uint32)              { win32.GlBindVertexArray(id) }
+func glGenVertexArrays(n int32, ids *uint32)    { win32.GlGenVertexArrays(n, ids) }
+func glBindVertexArray(id uint32)               { win32.GlBindVertexArray(id) }
 func glDeleteVertexArrays(n int32, ids *uint32) { win32.GlDeleteVertexArrays(n, ids) }
-func glEnableVertexAttribArray(index uint32)   { win32.GlEnableVertexAttribArray(index) }
+func glEnableVertexAttribArray(index uint32)    { win32.GlEnableVertexAttribArray(index) }
 func glVertexAttribPointer(index uint32, size int32, typ uint32, normalized uint8, stride int32, offset int32) {
 	win32.GlVertexAttribPointer(index, size, typ, normalized, stride, unsafe.Pointer(uintptr(offset)))
 }
@@ -68,16 +68,16 @@ func glGetShaderInfoLog(shader uint32, maxLen int32, length *int32, info *byte) 
 }
 func glDeleteShader(shader uint32) { win32.GlDeleteShader(shader) }
 
-func glCreateProgram() uint32             { return win32.GlCreateProgram() }
+func glCreateProgram() uint32               { return win32.GlCreateProgram() }
 func glAttachShader(program, shader uint32) { win32.GlAttachShader(program, shader) }
-func glLinkProgram(program uint32)        { win32.GlLinkProgram(program) }
+func glLinkProgram(program uint32)          { win32.GlLinkProgram(program) }
 func glGetProgramiv(program uint32, pname uint32, params *int32) {
 	win32.GlGetProgramiv(program, pname, params)
 }
 func glGetProgramInfoLog(program uint32, maxLen int32, length *int32, info *byte) {
 	win32.GlGetProgramInfoLog(program, maxLen, length, info)
 }
-func glUseProgram(program uint32)  { win32.GlUseProgram(program) }
+func glUseProgram(program uint32)    { win32.GlUseProgram(program) }
 func glDeleteProgram(program uint32) { win32.GlDeleteProgram(program) }
 func glGetUniformLocation(program uint32, name string) int32 {
 	return win32.GlGetUniformLocation(program, cstr(name))
@@ -86,9 +86,9 @@ func glUniform1i(loc int32, v int32)      { win32.GlUniform1i(loc, v) }
 func glUniform1f(loc int32, v float32)    { win32.GlUniform1f(loc, v) }
 func glUniform2f(loc int32, x, y float32) { win32.GlUniform2f(loc, x, y) }
 
-func glGenTextures(n int32, ids *uint32)  { win32.GlGenTextures(n, ids) }
+func glGenTextures(n int32, ids *uint32)     { win32.GlGenTextures(n, ids) }
 func glBindTexture(target uint32, id uint32) { win32.GlBindTexture(target, id) }
-func glDeleteTextures(n int32, ids *uint32) { win32.GlDeleteTextures(n, ids) }
+func glDeleteTextures(n int32, ids *uint32)  { win32.GlDeleteTextures(n, ids) }
 func glTexImage2D(target uint32, level, internalFormat int32, w, h int32, format, typ uint32, pixels []byte) {
 	var p unsafe.Pointer
 	if len(pixels) > 0 {
@@ -105,7 +105,7 @@ func glTexSubImage2D(target uint32, level, x, y, w, h int32, format, typ uint32,
 func glTexParameteri(target, pname uint32, param int32) {
 	win32.GlTexParameteri(target, pname, param)
 }
-func glActiveTexture(tex uint32)            { win32.GlActiveTexture(tex) }
+func glActiveTexture(tex uint32)              { win32.GlActiveTexture(tex) }
 func glPixelStorei(pname uint32, param int32) { win32.GlPixelStorei(pname, param) }
 
 func glGenFramebuffers(n int32, ids *uint32) { win32.GlGenFramebuffers(n, ids) }
@@ -121,11 +121,21 @@ func glCopyTexSubImage2D(target uint32, level, xoff, yoff, x, y, w, h int32) {
 	win32.GlCopyTexSubImage2D(target, level, xoff, yoff, x, y, w, h)
 }
 
-func glViewport(x, y, w, h int32)          { win32.GlViewport(x, y, w, h) }
-func glScissor(x, y, w, h int32)           { win32.GlScissor(x, y, w, h) }
-func glClearColor(r, g, b, a float32)      { win32.GlClearColor(r, g, b, a) }
-func glClear(mask uint32)                  { win32.GlClear(mask) }
-func glEnable(cap uint32)                  { win32.GlEnable(cap) }
-func glDisable(cap uint32)                 { win32.GlDisable(cap) }
-func glBlendFunc(sf, df uint32)            { win32.GlBlendFunc(sf, df) }
+func glViewport(x, y, w, h int32) { win32.GlViewport(x, y, w, h) }
+
+// glGetString 读取 GL 字符串（GL_RENDERER 用于识别软件光栅）。
+// 未初始化 GL 时 win32.GlGetString 为 nil，必须判空（否则单元测试里直接 panic）。
+func glGetString(name uint32) *byte {
+	if win32.GlGetString == nil {
+		return nil
+	}
+	return win32.GlGetString(name)
+}
+
+func glScissor(x, y, w, h int32)                   { win32.GlScissor(x, y, w, h) }
+func glClearColor(r, g, b, a float32)              { win32.GlClearColor(r, g, b, a) }
+func glClear(mask uint32)                          { win32.GlClear(mask) }
+func glEnable(cap uint32)                          { win32.GlEnable(cap) }
+func glDisable(cap uint32)                         { win32.GlDisable(cap) }
+func glBlendFunc(sf, df uint32)                    { win32.GlBlendFunc(sf, df) }
 func glDrawArrays(mode uint32, first, count int32) { win32.GlDrawArrays(mode, first, count) }

@@ -384,10 +384,10 @@ func (c *Compositor) Close() {
 
 // SetVisualOffset 设置视觉偏移（物理像素）。B 阶段用它把网页图层摆到节点矩形位置。
 func (c *Compositor) SetVisualOffset(visual uintptr, x, y float32) {
-if c == nil || visual == 0 {
-return
-}
-ComCallF(visual, dcVisualSetOffsetX, x)
-ComCallF(visual, dcVisualSetOffsetY, y)
-comCall(c.dcomp, dcDevCommit)
+	if c == nil || visual == 0 {
+		return
+	}
+	ComCallF(visual, dcVisualSetOffsetX, x)
+	ComCallF(visual, dcVisualSetOffsetY, y)
+	comCall(c.dcomp, dcDevCommit)
 }

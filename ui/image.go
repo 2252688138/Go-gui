@@ -6,17 +6,51 @@
 package ui
 
 import (
+	"bytes"
+	"encoding/base64"
+	"errors"
 	"image"
 	"image/draw"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"gogui/internal/gpu"
 )
+
+// errBadDataURL data URL 格式不合法。
+var errBadDataURL = errors.New("ui: 非法的 data URL")
+
+// imageReader 打开图片数据源：支持本地路径与 data: URL（Web 端选文件后
+// 图片以 data URL 形式返回，桌面端永远是路径）。blob: 需要异步 fetch，不支持。
+func imageReader(path string) (io.ReadCloser, error) {
+	if !strings.HasPrefix(path, "data:") {
+		return os.Open(path)
+	}
+	i := strings.Index(path, ",")
+	if i < 0 {
+		return nil, errBadDataURL
+	}
+	meta, body := path[:i], path[i+1:]
+	if strings.Contains(meta, ";base64") {
+		data, err := base64.StdEncoding.DecodeString(body)
+		if err != nil {
+			return nil, err
+		}
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}
+	s, err := url.PathUnescape(body)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(strings.NewReader(s)), nil
+}
 
 // imageMeta 图片尺寸缓存（布局阶段只需尺寸，不加载像素）。
 type imageMeta struct {
@@ -37,7 +71,7 @@ func ImageSize(path string) (int, int) {
 		return m.w, m.h
 	}
 	m := imageMeta{}
-	f, err := os.Open(path)
+	f, err := imageReader(path)
 	if err != nil {
 		m.err = err
 	} else {
@@ -55,7 +89,7 @@ func ImageSize(path string) (int, int) {
 
 // DecodeImage 解码图片为 NRGBA（非预乘，可直接上传 GL）。
 func DecodeImage(path string) (*image.NRGBA, error) {
-	f, err := os.Open(path)
+	f, err := imageReader(path)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +136,10 @@ type imageTextures struct {
 
 // imageTexBudget 单窗口图片纹理预算：超出后按「最近未使用」回收纹理。
 // 旧实现只增不减，翻完几百张图的相册/长列表后显存与堆都不会回落。
-const imageTexBudget int64 = 96 << 20
+// 96MB 的预算对「一屏几张缩略图」的常规界面而言过于宽松，
+// 现在收紧到 32MB：缩略图约可同时驻留 20~40 张，超过后按 LRU 回收、
+// 再次进入视口时自动重新解码（数据层有序，观感无差异）。
+const imageTexBudget int64 = 32 << 20
 
 func newImageTextures() *imageTextures { return &imageTextures{m: map[string]*texEntry{}} }
 
@@ -191,6 +228,30 @@ func (t *imageTextures) evict(r *gpu.Renderer, keep int64) {
 // frame() 看到 waiting>0 会持续请求重绘 —— 表现为滚过一批图片后窗口永久 100% CPU。
 func (t *imageTextures) beginFrame() { t.waiting.Store(0) }
 
+// releaseAll 释放全部图片纹理（空闲 / 最小化时调用），保留条目以便重新解码。
+// 条目里的 started 要复位，否则下次回到该页面时不会重新拉起解码。
+func (t *imageTextures) releaseAll(r *gpu.Renderer) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	victims := make([]*texEntry, 0, len(t.m))
+	for _, e := range t.m {
+		if e.tex != nil {
+			victims = append(victims, e)
+		}
+	}
+	t.bytes = 0
+	t.mu.Unlock()
+	for _, e := range victims {
+		if r != nil {
+			r.DeleteTexture(e.tex)
+		}
+		e.tex, e.bytes = nil, 0
+		e.started.Store(false)
+	}
+}
+
 func (t *imageTextures) entry(path string) *texEntry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -215,6 +276,7 @@ func (t *imageTextures) start(e *texEntry, a *App, path string) {
 	}
 	t.waiting.Store(0)
 	go func() {
+		defer recoverReport("image-decode")
 		defer imageLoads.Add(-1)
 		img, err := DecodeImage(path)
 		e.ready.Store(&texUpload{img: img, err: err})

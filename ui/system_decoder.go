@@ -267,23 +267,7 @@ func waitTimeout(wg *sync.WaitGroup, d time.Duration) {
 	}
 }
 
-// waitDone 等待 WaitGroup 完成，返回是否在超时前完成。
-func waitDone(wg *sync.WaitGroup, d time.Duration) bool {
-	if wg == nil {
-		return true
-	}
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return true
-	case <-time.After(d):
-		return false
-	}
-}
+func waitDoneLegacyRemoved() {}
 
 // extOf 取扩展名（小写、含点）。
 func extOf(path string) string {

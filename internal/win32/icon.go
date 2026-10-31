@@ -30,9 +30,9 @@ const (
 )
 
 var (
-	iconOnce                  sync.Once
-	createIconFromResourceEx  func(presbits uintptr, presbytes uint32, fIcon int32, dwVer uint32, cx, cy int32, flags uint32) uintptr
-	setClassLongPtrW          func(hwnd uintptr, index int32, value uintptr) uintptr
+	iconOnce                 sync.Once
+	createIconFromResourceEx func(presbits uintptr, presbytes uint32, fIcon int32, dwVer uint32, cx, cy int32, flags uint32) uintptr
+	setClassLongPtrW         func(hwnd uintptr, index int32, value uintptr) uintptr
 )
 
 func loadIconAPI() {

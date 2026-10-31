@@ -12,6 +12,7 @@ import (
 	"gogui/internal/geom"
 	"gogui/internal/gpu"
 )
+
 // ChartType 图表类型。
 type ChartType uint8
 
@@ -309,5 +310,5 @@ type chartCache struct {
 	nodeY float32
 
 	hitS, hitI int
-	hitOK     bool
+	hitOK      bool
 }

@@ -104,7 +104,7 @@ func smoothPoints(src []fpt, sub int) []fpt {
 			t := float32(s) / float32(sub)
 			t2, t3 := t*t, t*t*t
 			f := func(a0, a1, a2, a3 float32) float32 {
-				return 0.5 * ((2*a1) + (-a0+a2)*t + (2*a0-5*a1+4*a2-a3)*t2 + (-a0+3*a1-3*a2+a3)*t3)
+				return 0.5 * ((2 * a1) + (-a0+a2)*t + (2*a0-5*a1+4*a2-a3)*t2 + (-a0+3*a1-3*a2+a3)*t3)
 			}
 			out = append(out, fpt{f(p0.X, p1.X, p2.X, p3.X), f(p0.Y, p1.Y, p2.Y, p3.Y)})
 		}
@@ -222,7 +222,7 @@ func (d *chartDraw) pie(c *Chart) {
 			sweep = 0.004
 		}
 		d.sector(cx, cy, r0, r1, ang+gap/2, ang+gap/2+sweep, c.colorOf(j))
-		ang += float32(2*math.Pi*sum/total)
+		ang += float32(2 * math.Pi * sum / total)
 	}
 }
 

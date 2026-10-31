@@ -309,19 +309,19 @@ type propVariant struct {
 type MFSourceReader struct {
 	ptr uintptr
 
-	hasVideo, hasAudio bool
-	duration           time.Duration
-	width, height      int
-	fps                float64
-	stride             int
+	hasVideo, hasAudio   bool
+	duration             time.Duration
+	width, height        int
+	fps                  float64
+	stride               int
 	rate, channels, bits int
 	// pixFmt 视频输出格式：0=RGB32 1=NV12 2=YUY2 3=未知
-	pixFmt        int
-	videoIdx      int // 视频流索引（-1 无）
-	audioIdx      int // 音频流索引（-1 无）
-	eof           bool
-	closed        bool
-	mu            sync.Mutex
+	pixFmt   int
+	videoIdx int // 视频流索引（-1 无）
+	audioIdx int // 音频流索引（-1 无）
+	eof      bool
+	closed   bool
+	mu       sync.Mutex
 }
 
 // MFOpen 用系统解码器打开音频 / 视频文件。

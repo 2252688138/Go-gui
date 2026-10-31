@@ -58,6 +58,19 @@ func platformMapFontFile(path string) ([]byte, error) {
 	return nil, errors.New("font not registered: " + path)
 }
 
+// platformDefaultFontCandidates 浏览器端默认字体：第一个注册的字体（webFontDef）。
+func platformDefaultFontCandidates(weight int32) []string {
+	webFontMu.RLock()
+	defer webFontMu.RUnlock()
+	if webFontDef != "" {
+		return []string{webFontDef}
+	}
+	if len(webFontList) > 0 {
+		return []string{webFontList[0]}
+	}
+	return nil
+}
+
 // platformFontCandidates 浏览器端候选：优先按家族名 + 字重挑，其次家族名模糊匹配，
 // 最后回退默认字体。注册时可把粗体存成 "<名字>/Bold"（见 ui.RegisterFontBold）。
 func platformFontCandidates(faceName string, weight int32) []string {
